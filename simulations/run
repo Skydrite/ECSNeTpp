@@ -1,4 +1,3 @@
 #!/bin/sh
 cd `dirname $0`
-../src/ecsnetpp -n .:../src $*
-# for shared lib, use: opp_run -l ../src/ecsnetpp -n .:../src $*
+../out/clang-release/src/ECSNeTpp -u Cmdenv -n .:../src:../../inet-3.6.5/src/inet -f omnetpp.ini -c ETL-Pi3B-1-Plan

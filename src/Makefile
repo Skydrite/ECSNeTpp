@@ -15,13 +15,13 @@ USERIF_LIBS = $(ALL_ENV_LIBS) # that is, $(TKENV_LIBS) $(QTENV_LIBS) $(CMDENV_LI
 #USERIF_LIBS = $(QTENV_LIBS)
 
 # C++ include paths (with -I)
-INCLUDE_PATH = -I$(INET_PROJ)/src
+INCLUDE_PATH = -I/home/opp_env/inet_workspace/inet-3.6.5/src -I$(OMNETPP_ROOT)/include -I/usr/include
 
 # Additional object and library files to link with
 EXTRA_OBJS =
 
 # Additional libraries (-L, -l options)
-LIBS = $(LDFLAG_LIBPATH)$(INET_PROJ)/out/$(CONFIGNAME)/src  -lINET
+LIBS = $(LDFLAG_LIBPATH)/home/opp_env/inet_workspace/inet-3.6.5/out/clang-release/src  -lINET -ltinyxml2
 
 # Output directory
 PROJECT_OUTPUT_DIR = ../out
