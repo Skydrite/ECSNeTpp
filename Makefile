@@ -17,13 +17,16 @@ USERIF_LIBS = $(ALL_ENV_LIBS) # that is, $(TKENV_LIBS) $(QTENV_LIBS) $(CMDENV_LI
 
 # C++ include paths (with -I)
 INCLUDE_PATH = -I/usr/include
+all:
+	$(MAKE) -C src
 
+clean:
+	$(MAKE) -C src clean
 # Additional object and library files to link with
 EXTRA_OBJS =
 
 # Additional libraries (-L, -l options)
-LIBS = $(LDFLAG_LIBPATH)/usr/lib/x86_64-linux-gnu  -ltinyxml2
-
+LIBS = $(LDFLAG_LIBPATH)/home/opp_env/tinyxml2-local/lib  -ltinyxml2
 # Output directory
 PROJECT_OUTPUT_DIR = out
 PROJECTRELATIVE_PATH =
@@ -61,7 +64,7 @@ include $(CONFIGFILE)
 # Simulation kernel and user interface libraries
 OMNETPP_LIBS = $(OPPMAIN_LIB) $(USERIF_LIBS) $(KERNEL_LIBS) $(SYS_LIBS)
 ifneq ($(TOOLCHAIN_NAME),clangc2)
-LIBS += -Wl,-rpath,$(abspath /usr/lib/x86_64-linux-gnu)
+LIBS += -Wl,-rpath,$(abspath /home/opp_env/tinyxml2-local/lib)
 endif
 
 COPTS = $(CFLAGS) $(IMPORT_DEFINES)  $(INCLUDE_PATH) -I$(OMNETPP_INCL_DIR)
