@@ -148,9 +148,11 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
                     continue;
                 }
 
-                std::stringstream ss;
+                /*std::stringstream ss;
                 ss << staskName << i;
-                const char* newStaskName = ss.str().c_str();
+                const char* newStaskName = ss.str().c_str();*/
+                std::string newStaskNameStr = std::string(staskName) + std::to_string(i);
+                const char* newStaskName = newStaskNameStr.c_str();
 
                 cModuleType *modtype = cModuleType::find(staskType);
                 if (!modtype) {
@@ -281,8 +283,11 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
                 std::string _destSTaskCategory = staskNameToCategoryMap[_dest->getFullName()];
 
                 if (_src->getFullName() != _dest->getFullName()) {
-
+                    //std::cout << "CHECKING: " << _srcSTaskCategory
+                    //          << " -> " << _destSTaskCategory << endl;
                     if (connectedSTasks[_srcSTaskCategory][_destSTaskCategory]) {
+                        //std::cout << "CONNECTING: " << _src->getFullPath()
+                        //          << " -> " << _dest->getFullPath() << endl;
                         cGate *srcOut, *destIn;
 
                         srcOut = _src->getOrCreateFirstUnconnectedGate("outgoingStream", 0, false, true);
@@ -296,6 +301,31 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
             }
         }
     }
+
+    for (auto itA = allocationMap.begin(); itA != allocationMap.end(); ++itA) {
+        for (auto itB = allocationMap.begin(); itB != allocationMap.end(); ++itB) {
+            if (itA->first == itB->first) continue;
+
+            for (auto& srcMod : itA->second) {
+                for (auto& destMod : itB->second) {
+                    std::string srcCat = staskNameToCategoryMap[srcMod->getFullName()];
+                    std::string destCat = staskNameToCategoryMap[destMod->getFullName()];
+
+                    if (connectedSTasks[srcCat][destCat]) {
+                        bool srcIsOnPi3B = itA->first.find("pi3Bs") != std::string::npos;
+                        bool destIsOnPi3B = itB->first.find("pi3Bs") != std::string::npos;
+                        if (srcIsOnPi3B && destIsOnPi3B) continue;
+                        //std::cout << "CROSS-CONNECTING: " << srcMod->getFullPath()
+                        //         << " -> " << destMod->getFullPath() << endl;
+                        cGate *srcOut = srcMod->getOrCreateFirstUnconnectedGate("outgoingStream", 0, false, true);
+                        cGate *destIn = destMod->getOrCreateFirstUnconnectedGate("incomingStream", 0, false, true);
+                        connect(srcOut, destIn, -1, -1, -1);
+                    }
+                }
+            }
+        }
+    }
+
     for (it = allocationMap.begin(); it != allocationMap.end(); ++it) {
         std::string _parentName = it->first;
         cModule *_parent = getParentModule()->getModuleByPath(_parentName.c_str());
