@@ -1,5 +1,5 @@
 //
-// Generated file, do not edit! Created by nedtool 5.1 from msg/Ack.msg.
+// Generated file, do not edit! Created by nedtool 5.5 from msg/Ack.msg.
 //
 
 // Disable warnings about unused variables, empty switch stmts, etc:

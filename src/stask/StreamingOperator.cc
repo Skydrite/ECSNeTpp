@@ -78,6 +78,7 @@ void StreamingOperator::initialize() {
 }
 
 void StreamingOperator::handleMessage(cMessage *msg) {
+    // std::cout << "Test, entered handleMessage of " << getFullPath() << " (StreamingOperator) at time " << simTime() << endl;
     if (msg->arrivedOn("fromCPU")) {
         nextToSend = check_and_cast<StreamingMessage *>(msg);
         for (int i = 0; i < gateSize("outgoingStream"); i++) {

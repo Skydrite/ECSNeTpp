@@ -1,5 +1,5 @@
 //
-// Generated file, do not edit! Created by nedtool 5.1 from msg/StreamingMessage.msg.
+// Generated file, do not edit! Created by nedtool 5.5 from msg/StreamingMessage.msg.
 //
 
 // Disable warnings about unused variables, empty switch stmts, etc:

@@ -76,9 +76,11 @@ void StreamingSource::initialize() {
 }
 
 void StreamingSource::handleMessage(cMessage *msg) {
+    // std::cout << "Test, entered handleMessage of " << getFullPath() << " (StreamingSource) at time " << simTime() << endl;
 //    publishCpuStateChanged(States::CPU_BUSY);
 
     if (msg->isSelfMessage()) {
+        //std::cout << "Self message arrived at " << getFullPath() << " at time " << simTime() << endl;
         if (!commonSimController->getStopEventGeneration()) {
             StreamingMessage *sourceMsg = new StreamingMessage();
             sourceMsg->setBitLength(getMessageSize());
@@ -108,12 +110,16 @@ void StreamingSource::handleMessage(cMessage *msg) {
             scheduleAt(simTime() + getMessageDelay(), timerMsg);
         }
     } else if (msg->arrivedOn("fromCPU")) {
+       // std::cout << "From CPU message arrived at " << getFullPath() << " at time " << simTime() << endl;
+        //std::cout << "outgoingStream gate size = " << gateSize("outgoingStream")
+             //     << " at " << getFullPath() << endl;
         StreamingMessage *sourceMsg = check_and_cast<StreamingMessage *>(msg);
         emit(packetGeneratedSignal, 1, getParentModule());
         for (int i = 0; i < gateSize("outgoingStream"); i++) {
             send(sourceMsg->dup(), "outgoingStream", i);
         }
     } else {
+       // std::cout << "To be deleted message arrived at " << getFullPath() << " at time " << simTime() << endl;
         delete msg;
     }
 

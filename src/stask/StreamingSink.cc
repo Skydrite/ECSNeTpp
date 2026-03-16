@@ -14,12 +14,16 @@
 // 
 
 #include "StreamingSink.h"
+#include <algorithm>
+#include <cmath>
+#include <vector>
 
 namespace ecsnetpp {
 
 Define_Module(StreamingSink);
 
 void StreamingSink::initialize() {
+    e2eP99Signal = registerSignal("e2eP99");
     omnetpp::cModule* submodule = getParentModule()->getSubmodule("cpuCoreScheduler");
     myCpuCoreScheduler = check_and_cast<ICpuCoreScheduler *>(submodule);
     ackersEnabled = getAncestorPar("ackersEnabled").boolValue();
@@ -40,6 +44,7 @@ void StreamingSink::initialize() {
 }
 
 void StreamingSink::handleMessage(cMessage *msg) {
+    // std::cout << "Testing: " << msg->getName() << " arrived at " << getFullPath() << " at time " << simTime() << endl;
     if (msg->arrivedOn("fromCPU")) {
         StreamingMessage *pk = check_and_cast<StreamingMessage *>(msg);
         double _networkDelay = pk->getNetworkDelay();
@@ -48,6 +53,8 @@ void StreamingSink::handleMessage(cMessage *msg) {
         emit(processingTimeSignal, _processingDelay);
 //        const omnetpp::SimTime _latency = simTime() - pk->getStartTime();
         emit(latencySignal, _networkDelay + _processingDelay);
+        double e2e = _networkDelay + _processingDelay;
+        e2eLatencies.push_back(e2e);
         emit(edgeProcessingTimeSignal, pk->getEdgeProcessingDelay());
         emit(receivedStreamingMsgsSignal, pk);
 //        std::cout << " CPU proc delay: " << pk->getEdgeProcessingDelay() << " : " <<  pk->getProcessingDelay() << endl;
@@ -79,5 +86,13 @@ void StreamingSink::handleMessage(cMessage *msg) {
 //
 //        publishCpuStateChanged(States::CPU_IDLE);
 //    }
-}
+    }
+
+    void StreamingSink::finish() {
+        if (!e2eLatencies.empty()) {
+            std::sort(e2eLatencies.begin(), e2eLatencies.end());
+            int idx = (int)std::ceil(0.99 * e2eLatencies.size()) - 1;
+            emit(e2eP99Signal, e2eLatencies[idx]);
+        }
+    }
 } /* namespace ecsnetpp */

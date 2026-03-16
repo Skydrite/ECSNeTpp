@@ -59,6 +59,7 @@ network SimpleEdgeCloudEnvironment
         {
             delay = 0;
             datarate = eToCDatarate;
+            //cost = 1.2
         }
 
         channel E2C_high extends DatarateChannel

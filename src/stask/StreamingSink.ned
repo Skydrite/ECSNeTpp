@@ -24,6 +24,13 @@ simple StreamingSink like ISTask
         @signal[transmissionTime](type=double);
         @signal[processingTime](type=double);
         @signal[edgeProcessingTime](type=double);
+        @signal[e2eP99](type=double);
+        @statistic[e2eP99](
+            title="E2E 99th Percentile Latency";
+            source=e2eP99;
+            record=last;
+            unit=s
+        );
         @statistic[rcvdStreamingMsgsStat](title="packets received"; source=receivedStreamingMsgs; record=count,"sum(packetBytes)","vector(packetBytes)"; interpolationmode=none);
         @statistic[throughput](title="throughput"; unit=bps; source="throughput(receivedStreamingMsgs)"; record=vector);
         @statistic[rcvdStreamingMsgsCount](title="Streaming Msg Count"; source=receivedStreamingMsgs; record=count);
