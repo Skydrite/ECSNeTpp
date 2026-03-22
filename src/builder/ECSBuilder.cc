@@ -16,6 +16,7 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <set>
 #include <string.h>
 #include "ECSBuilder.h"
 
@@ -302,6 +303,7 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
         }
     }
 
+    std::set<std::pair<std::string,std::string>> directlyConnected;
     for (auto itA = allocationMap.begin(); itA != allocationMap.end(); ++itA) {
         for (auto itB = allocationMap.begin(); itB != allocationMap.end(); ++itB) {
             if (itA->first == itB->first) continue;
@@ -312,14 +314,14 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
                     std::string destCat = staskNameToCategoryMap[destMod->getFullName()];
 
                     if (connectedSTasks[srcCat][destCat]) {
-                        bool srcIsOnPi3B = itA->first.find("pi3Bs") != std::string::npos;
-                        bool destIsOnPi3B = itB->first.find("pi3Bs") != std::string::npos;
-                        if (srcIsOnPi3B && destIsOnPi3B) continue;
-                        //std::cout << "CROSS-CONNECTING: " << srcMod->getFullPath()
-                        //         << " -> " << destMod->getFullPath() << endl;
                         cGate *srcOut = srcMod->getOrCreateFirstUnconnectedGate("outgoingStream", 0, false, true);
                         cGate *destIn = destMod->getOrCreateFirstUnconnectedGate("incomingStream", 0, false, true);
                         connect(srcOut, destIn, -1, -1, -1);
+                        // record direct connection
+                        directlyConnected.insert({srcCat, destCat});
+                        // increment usage maps so supervisor doesn't add duplicate connections
+                        outgoingConnectionsUsageMap[itA->first][srcMod->getFullName()] += 1;
+                        incomingConnectionsUsageMap[itB->first][destMod->getFullName()] += 1;
                     }
                 }
             }
@@ -367,12 +369,14 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
         StreamingSupervisor *_supervisor = check_and_cast<StreamingSupervisor *>(_parent->getSubmodule("supervisor"));
 
         // add the sender->parent_node_fullname mapping
+        // skip pairs that are already directly connected via gates
         std::map<std::string, std::vector<std::string>>::iterator _senderIt;
         for (_senderIt = staskSenderToDownstreamStaskCategoryMap.begin(); _senderIt != staskSenderToDownstreamStaskCategoryMap.end(); ++_senderIt) {
             std::string sender = _senderIt->first;
             std::vector<std::string> _staskCategories = _senderIt->second;
 
             for (size_t i = 0; i < _staskCategories.size(); i++) {
+                if (directlyConnected.count({sender, _staskCategories[i]}) > 0) continue;
                 _supervisor->addSTaskCategoryToDownstreamNodeMapping(sender, staskCategoryToParentMap[_staskCategories[i]]);
             }
         }
@@ -382,12 +386,14 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
 
     if (hasGlobalSupervisor) {
         // add the sender->parent_node_fullname mapping
+        // skip pairs that are already directly connected via gates
         std::map<std::string, std::vector<std::string>>::iterator _senderIt;
         for (_senderIt = staskSenderToDownstreamStaskCategoryMap.begin(); _senderIt != staskSenderToDownstreamStaskCategoryMap.end(); ++_senderIt) {
             std::string sender = _senderIt->first;
             std::vector<std::string> _staskCategories = _senderIt->second;
 
             for (size_t i = 0; i < _staskCategories.size(); i++) {
+                if (directlyConnected.count({sender, _staskCategories[i]}) > 0) continue;
                 globalSupervisor->addSTaskCategoryToDownstreamNodeMapping(sender, staskCategoryToParentMap[_staskCategories[i]]);
             }
         }
