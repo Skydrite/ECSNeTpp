@@ -30,7 +30,7 @@ CSV_COLUMNS = [
     "freq_hz",
     "events_completed", "e2e_mean_s", "e2e_stddev_s",
     "e2e_min_s", "e2e_max_s", "e2e_p99_s",
-    "processing_mean_s", "network_mean_s", "total_latency_mean_s"
+    "processing_mean_s", "link_latency_mean_s", "total_latency_mean_s"
 ]
 
 
@@ -475,7 +475,7 @@ def write_markdown(ini_data, metrics, topo_string, placements, timestamp, md_pat
         f"| E2E Max | {fmt(metrics['e2e_max'])} s |",
         f"| E2E P99 | {fmt(metrics['e2e_p99'])} s |",
         f"| Processing Mean | {fmt(metrics['processing_mean'])} s |",
-        f"| Network Mean | {fmt(metrics['network_mean'])} s |",
+        f"| Link Latency Mean | {fmt(metrics['network_mean'])} s |",
         f"| Total Latency Mean | {fmt(metrics['total_latency_mean'])} s |",
         f"",
         f"---",
@@ -576,7 +576,7 @@ def main():
         "e2e_max_s":            metrics["e2e_max"],
         "e2e_p99_s":            metrics["e2e_p99"],
         "processing_mean_s":    metrics["processing_mean"],
-        "network_mean_s":       metrics["network_mean"],
+        "link_latency_mean_s":       metrics["network_mean"],
         "total_latency_mean_s": metrics["total_latency_mean"]
     }
     write_csv(csv_row, CSV_FILE)
