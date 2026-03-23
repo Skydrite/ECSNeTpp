@@ -417,7 +417,8 @@ def write_csv(row, csv_path):
 # 7. Write Markdown report
 # ─────────────────────────────────────────────────────────────────────────────
 
-def write_markdown(ini_data, metrics, topo_string, placements, timestamp, md_path):
+def write_markdown(ini_data, metrics, topo_string, placements,
+                   timestamp, md_path, total_rates=None, sources_per_device=None):
     """Write a detailed Markdown report for this run."""
 
     os.makedirs(os.path.dirname(md_path), exist_ok=True)
@@ -427,10 +428,21 @@ def write_markdown(ini_data, metrics, topo_string, placements, timestamp, md_pat
             return "N/A"
         return f"{value:.{decimals}f}"
 
-    event_rates_str = "\n".join(
-        f"  - `{device}`: {rate} ev/s"
-        for device, rate in sorted(ini_data["event_rates"].items())
-    ) or "  - (none found)"
+    if total_rates:
+        event_rates_str = "\n".join(
+            f"  - `{device}`: {ini_data['event_rates'].get(device, 0)} ev/s per source"
+            f" × {sources_per_device.get(device, 0)} sources"
+            f" = **{total_rates.get(device, 0)} ev/s total**"
+            for device in sorted(
+                {f"{p['device']}[{p['range'].split('..')[0]}]"
+                 for p in placements}
+            )
+        ) or "  - (none found)"
+    else:
+        event_rates_str = "\n".join(
+            f"  - `{device}`: {rate} ev/s"
+            for device, rate in sorted(ini_data["event_rates"].items())
+        ) or "  - (none found)"
 
     placement_table = "| Task | Type | Device | Index Range |\n|------|------|--------|-------------|\n"
     for p in placements:
@@ -487,6 +499,22 @@ def write_markdown(ini_data, metrics, topo_string, placements, timestamp, md_pat
         f.write("\n".join(lines))
 
     print(f"  → Markdown report: {md_path}")
+
+def compute_device_total_rates(ini_data, placements):
+    # Count sources per device from placement XML
+    sources_per_device = {}
+    for p in placements:
+        key = f"{p['device']}[{p['range'].split('..')[0]}]"
+        if p["type"] == "StreamingSource":
+            sources_per_device[key] = sources_per_device.get(key, 0) + 1
+
+    # Multiply rate × source count per device
+    total_rates = {}
+    for device, rate in ini_data["event_rates"].items():
+        source_count = sources_per_device.get(device, 0)
+        total_rates[device] = rate * source_count
+
+    return total_rates, sources_per_device
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -584,7 +612,9 @@ def main():
     # Markdown report
     md_filename = f"{ts_file}_{ini_data['config']}.md"
     md_path     = os.path.join(REPORTS_DIR, md_filename)
-    write_markdown(ini_data, metrics, topo_string, placements, timestamp, md_path)
+    total_rates, sources_per_device = compute_device_total_rates(ini_data, placements)
+    write_markdown(ini_data, metrics, topo_string, placements,
+                   timestamp, md_path, total_rates, sources_per_device)
 
     print(f"\n{'='*50}")
     print(f"  Done!")
