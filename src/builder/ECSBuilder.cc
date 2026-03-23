@@ -16,7 +16,6 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
-#include <set>
 #include <string.h>
 #include "ECSBuilder.h"
 
@@ -280,7 +279,6 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
             // iterate per each stask in the vector
             for (it3 = tmp.begin(); it3 != tmp.end(); ++it3) {
                 cModule *_dest = check_and_cast<cModule *>(*it3);
-
                 std::string _destSTaskCategory = staskNameToCategoryMap[_dest->getFullName()];
 
                 if (_src->getFullName() != _dest->getFullName()) {
@@ -303,31 +301,6 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
         }
     }
 
-    std::set<std::pair<std::string,std::string>> directlyConnected;
-    for (auto itA = allocationMap.begin(); itA != allocationMap.end(); ++itA) {
-        for (auto itB = allocationMap.begin(); itB != allocationMap.end(); ++itB) {
-            if (itA->first == itB->first) continue;
-
-            for (auto& srcMod : itA->second) {
-                for (auto& destMod : itB->second) {
-                    std::string srcCat = staskNameToCategoryMap[srcMod->getFullName()];
-                    std::string destCat = staskNameToCategoryMap[destMod->getFullName()];
-
-                    if (connectedSTasks[srcCat][destCat]) {
-                        cGate *srcOut = srcMod->getOrCreateFirstUnconnectedGate("outgoingStream", 0, false, true);
-                        cGate *destIn = destMod->getOrCreateFirstUnconnectedGate("incomingStream", 0, false, true);
-                        connect(srcOut, destIn, -1, -1, -1);
-                        // record direct connection
-                        directlyConnected.insert({srcCat, destCat});
-                        // increment usage maps so supervisor doesn't add duplicate connections
-                        outgoingConnectionsUsageMap[itA->first][srcMod->getFullName()] += 1;
-                        incomingConnectionsUsageMap[itB->first][destMod->getFullName()] += 1;
-                    }
-                }
-            }
-        }
-    }
-
     for (it = allocationMap.begin(); it != allocationMap.end(); ++it) {
         std::string _parentName = it->first;
         cModule *_parent = getParentModule()->getModuleByPath(_parentName.c_str());
@@ -341,11 +314,24 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
             cGate *taskIn, *taskOut, *supervisorIn, *supervisorOut;
             cModule *supervisor = _parent->getSubmodule("supervisor");
 
+            std::string _srcCategory = staskNameToCategoryMap[_src->getFullName()];
+            std::vector<std::string> senders = staskDownstreamCategoryToSenderMap[_srcCategory];
+            int senderIndex = 0;
             while (incomingConnectionsUsageMap[_parentName][_src->getFullName()]
-                    < incomingConnectionsCountMap[staskNameToCategoryMap[_src->getFullName()]]) {
+                   < incomingConnectionsCountMap[_srcCategory]) {
                 taskIn = _src->getOrCreateFirstUnconnectedGate("incomingStream", 0, false, true);
                 supervisorOut = supervisor->getOrCreateFirstUnconnectedGate("streamingPortOut", 0, false, true);
+                int gateIndex = supervisorOut->getIndex();
                 connect(supervisorOut, taskIn, -1, -1, -1);
+
+                // Map exactly ONE sender to this gate
+                // Each gate handles one incoming sender
+                StreamingSupervisor *_sv = check_and_cast<StreamingSupervisor *>(supervisor);
+                if (senderIndex < (int)senders.size()) {
+                    _sv->addSenderToLocalGateMapping(senders[senderIndex], gateIndex);
+                    senderIndex++;
+                }
+
                 incomingConnectionsUsageMap[_parentName][_src->getFullName()] += 1;
             }
 
@@ -368,36 +354,37 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
 
         StreamingSupervisor *_supervisor = check_and_cast<StreamingSupervisor *>(_parent->getSubmodule("supervisor"));
 
-        // add the sender->parent_node_fullname mapping
-        // skip pairs that are already directly connected via gates
-        std::map<std::string, std::vector<std::string>>::iterator _senderIt;
-        for (_senderIt = staskSenderToDownstreamStaskCategoryMap.begin(); _senderIt != staskSenderToDownstreamStaskCategoryMap.end(); ++_senderIt) {
-            std::string sender = _senderIt->first;
-            std::vector<std::string> _staskCategories = _senderIt->second;
+        // Only add routing entries for tasks hosted on THIS device
+        for (it2 = tmp.begin(); it2 != tmp.end(); ++it2) {
+            cModule *_hostedTask = check_and_cast<cModule *>(*it2);
+            std::string _hostedTaskCategory = staskNameToCategoryMap[_hostedTask->getFullName()];
 
-            for (size_t i = 0; i < _staskCategories.size(); i++) {
-                if (directlyConnected.count({sender, _staskCategories[i]}) > 0) continue;
-                _supervisor->addSTaskCategoryToDownstreamNodeMapping(sender, staskCategoryToParentMap[_staskCategories[i]]);
+            std::vector<std::string> _downstreamCategories = staskSenderToDownstreamStaskCategoryMap[_hostedTaskCategory];
+
+            for (size_t i = 0; i < _downstreamCategories.size(); i++) {
+                std::string destCategory = _downstreamCategories[i];
+                _supervisor->addSTaskCategoryToDownstreamNodeMapping(
+                        _hostedTaskCategory,
+                        staskCategoryToParentMap[destCategory]
+                );
             }
         }
-        // resolve the parent names to IP addresses
         _supervisor->resolveDownstreamNodeIPs();
     }
 
     if (hasGlobalSupervisor) {
-        // add the sender->parent_node_fullname mapping
-        // skip pairs that are already directly connected via gates
         std::map<std::string, std::vector<std::string>>::iterator _senderIt;
-        for (_senderIt = staskSenderToDownstreamStaskCategoryMap.begin(); _senderIt != staskSenderToDownstreamStaskCategoryMap.end(); ++_senderIt) {
+        for (_senderIt = staskSenderToDownstreamStaskCategoryMap.begin();
+             _senderIt != staskSenderToDownstreamStaskCategoryMap.end(); ++_senderIt) {
             std::string sender = _senderIt->first;
             std::vector<std::string> _staskCategories = _senderIt->second;
-
             for (size_t i = 0; i < _staskCategories.size(); i++) {
-                if (directlyConnected.count({sender, _staskCategories[i]}) > 0) continue;
-                globalSupervisor->addSTaskCategoryToDownstreamNodeMapping(sender, staskCategoryToParentMap[_staskCategories[i]]);
+                globalSupervisor->addSTaskCategoryToDownstreamNodeMapping(
+                        sender,
+                        staskCategoryToParentMap[_staskCategories[i]]
+                );
             }
         }
-        // resolve the parent names to IP addresses
         globalSupervisor->resolveDownstreamNodeIPs();
     }
 

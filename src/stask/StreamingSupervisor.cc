@@ -171,31 +171,38 @@ void StreamingSupervisor::handleMessage(cMessage *msg) {
     }
 }
 
-void StreamingSupervisor::socketDataArrived(int connId, void *yourPtr, cPacket *msg, bool urgent) {
-//    StreamingMessage *pk = check_and_cast<StreamingMessage *>(msg);
-//    std::cout << "Received TCP data, " << msg->getByteLength() << " Length:" << pk->getByteLength() << " bytes" << endl;
-//    std::cout << getParentModule()->getFullPath() << "Proc delay: " << pk->getProcessingDelay() << endl;
-    if (!ackersEnabled && !checkpointsEnabled) {
-        StreamingMessage* msgToSend = check_and_cast<StreamingMessage*>(msg);
-        const omnetpp::SimTime _networkDelay = simTime() - msgToSend->getChannelIngressTime();
-        msgToSend->setNetworkDelay(_networkDelay.dbl());
-        for (int i = 0; i < gateSize("streamingPortOut"); i++) {
-            send(msgToSend->dup(), "streamingPortOut", i);
-        }
-    } else {
-        Ack *ack = dynamic_cast<Ack *>(msg);
-        if (nullptr == ack) {
-            for (int i = 0; i < gateSize("streamingPortOut"); i++) {
-                send(msg->dup(), "streamingPortOut", i);
+    void StreamingSupervisor::socketDataArrived(int connId, void *yourPtr, cPacket *msg, bool urgent) {
+        if (!ackersEnabled && !checkpointsEnabled) {
+            StreamingMessage* msgToSend = check_and_cast<StreamingMessage*>(msg);
+            const omnetpp::SimTime _networkDelay = simTime() - msgToSend->getChannelIngressTime();
+            msgToSend->setNetworkDelay(_networkDelay.dbl());
+
+            std::string sender = msgToSend->getSender();
+            auto it = senderToLocalGateMap.find(sender);
+
+            if (it != senderToLocalGateMap.end() && !it->second.empty()) {
+                for (int gateIdx : it->second) {
+                    send(msgToSend->dup(), "streamingPortOut", gateIdx);
+                }
+            } else {
+                for (int i = 0; i < gateSize("streamingPortOut"); i++) {
+                    send(msgToSend->dup(), "streamingPortOut", i);
+                }
             }
         } else {
-            for (int i = 0; i < gateSize("ackerOut"); i++) {
-                send(ack->dup(), "ackerOut", i);
+            Ack *ack = dynamic_cast<Ack *>(msg);
+            if (nullptr == ack) {
+                for (int i = 0; i < gateSize("streamingPortOut"); i++) {
+                    send(msg->dup(), "streamingPortOut", i);
+                }
+            } else {
+                for (int i = 0; i < gateSize("ackerOut"); i++) {
+                    send(ack->dup(), "ackerOut", i);
+                }
             }
         }
+        delete msg;
     }
-    delete msg;
-}
 
 void StreamingSupervisor::socketFailure(int connId, void *yourPtr, int code) {
     if (code == inet::TCP_I_CONNECTION_RESET)
@@ -239,6 +246,10 @@ void StreamingSupervisor::resolveDownstreamNodeIPs() {
         senderStaskCategoryToDownstreamNodeIPMap[_staskCategory] =
                 inet::L3AddressResolver().resolve(_downstreamNodes);
     }
+}
+
+void StreamingSupervisor::addSenderToLocalGateMapping(std::string senderCategory, int gateIndex) {
+    senderToLocalGateMap[senderCategory].push_back(gateIndex);
 }
 
 }

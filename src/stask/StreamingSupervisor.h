@@ -36,6 +36,7 @@ private:
     std::map<inet::L3Address, inet::TCPSocket *> destinationSocketMap;
     std::map<std::string, std::vector<std::string>> senderStaskCategoryToDownstreamNodeMap;
     std::map<std::string, std::vector<inet::L3Address>> senderStaskCategoryToDownstreamNodeIPMap;
+    std::map<std::string, std::vector<int>> senderToLocalGateMap;
 
     simtime_t startTime = -1;
     int count = 0;
@@ -60,6 +61,7 @@ public:
             std::string senderSTaskCategory,
             std::vector<std::string> downstreamNodeFullPaths);
     virtual void resolveDownstreamNodeIPs();
+    virtual void addSenderToLocalGateMapping(std::string senderCategory, int gateIndex);
     virtual void socketDataArrived(int connId, void *yourPtr, cPacket *msg, bool urgent) override;
     virtual void socketFailure(int connId, void *yourPtr, int code) override;
 };
