@@ -134,86 +134,120 @@ def parse_ini(ini_path):
 
 def parse_sca(sca_path):
     """
-    Extract from .sca:
-      - endToEndDelay stats (count, mean, stddev, min, max)
-      - e2eP99:last
-      - processingLatency mean
-      - transmissionLatency mean
-      - totalLatency mean
+    Extract per-sink metrics from .sca, then aggregate across all sinks.
+    Returns (aggregated_metrics, per_sink_dict) where per_sink_dict maps
+    a short sink label (e.g. 'cloudNodes[0]') to its metric dict.
     """
-    metrics = {
-        "count":              None,
-        "e2e_mean":           None,
-        "e2e_stddev":         None,
-        "e2e_min":            None,
-        "e2e_max":            None,
-        "e2e_p99":            None,
-        "processing_mean":    None,
-        "network_mean":       None,
-        "total_latency_mean": None,
-    }
-
-    # We parse the scalar section and statistic section
-    # Track which statistic block we are in
+    per_module = {}   # full_module_path -> metric dict
+    current_module    = None
     current_statistic = None
 
     with open(sca_path, "r") as f:
         for line in f:
             line = line.strip()
 
-            # e2eP99 scalar
-            m = re.match(r'^scalar\s+\S+\s+e2eP99:last\s+([\d.eE+\-]+)', line)
+            # e2eP99 scalar  — keyed by module
+            m = re.match(r'^scalar\s+(\S+)\s+e2eP99:last\s+([\d.eE+\-]+)', line)
             if m:
-                metrics["e2e_p99"] = float(m.group(1))
+                mod = m.group(1)
+                per_module.setdefault(mod, {})["e2e_p99"] = float(m.group(2))
                 continue
 
-            # statistic block header
-            m = re.match(r'^statistic\s+\S+\s+(\S+)', line)
+            # statistic block header  — captures module + stat name
+            m = re.match(r'^statistic\s+(\S+)\s+(\S+)', line)
             if m:
-                current_statistic = m.group(1)
+                current_module    = m.group(1)
+                current_statistic = m.group(2)
+                per_module.setdefault(current_module, {})
                 continue
 
             # fields inside a statistic block
-            if current_statistic:
+            if current_statistic and current_module:
                 m = re.match(r'^field\s+(\w+)\s+([\d.eE+\-]+)', line)
                 if m:
-                    field_name  = m.group(1)
-                    field_value = float(m.group(2))
-
+                    fname = m.group(1)
+                    fval  = float(m.group(2))
                     if current_statistic == "endToEndDelay:stats":
-                        if field_name == "count":  metrics["count"]      = int(field_value)
-                        if field_name == "mean":   metrics["e2e_mean"]   = field_value
-                        if field_name == "stddev": metrics["e2e_stddev"] = field_value
-                        if field_name == "min":    metrics["e2e_min"]    = field_value
-                        if field_name == "max":    metrics["e2e_max"]    = field_value
+                        if fname == "count":  per_module[current_module]["count"]      = int(fval)
+                        if fname == "mean":   per_module[current_module]["e2e_mean"]   = fval
+                        if fname == "stddev": per_module[current_module]["e2e_stddev"] = fval
+                        if fname == "min":    per_module[current_module]["e2e_min"]    = fval
+                        if fname == "max":    per_module[current_module]["e2e_max"]    = fval
                     continue
 
-            # vector summary lines for latency means
-            # format: vector <id> <module> <name>:vector TV
-            # data lines: <id> <count_idx> <...> <count> <min> <mean> <sum> <sumsq>
-            # We read mean from the processingLatency, transmissionLatency, totalLatency vectors
-            # These appear as inline data in .sca when scalar-recording is on
-
-            # scalar for processingLatency mean
-            m = re.match(r'^scalar\s+\S+\s+processingLatency:mean\s+([\d.eE+\-]+)', line)
+            # scalar latency means  — keyed by module
+            m = re.match(r'^scalar\s+(\S+)\s+processingLatency:mean\s+([\d.eE+\-]+)', line)
             if m:
-                metrics["processing_mean"] = float(m.group(1))
+                per_module.setdefault(m.group(1), {})["processing_mean"] = float(m.group(2))
                 continue
 
-            m = re.match(r'^scalar\s+\S+\s+transmissionLatency:mean\s+([\d.eE+\-]+)', line)
+            m = re.match(r'^scalar\s+(\S+)\s+transmissionLatency:mean\s+([\d.eE+\-]+)', line)
             if m:
-                metrics["network_mean"] = float(m.group(1))
+                per_module.setdefault(m.group(1), {})["network_mean"] = float(m.group(2))
                 continue
 
-            m = re.match(r'^scalar\s+\S+\s+totalLatency:mean\s+([\d.eE+\-]+)', line)
+            m = re.match(r'^scalar\s+(\S+)\s+totalLatency:mean\s+([\d.eE+\-]+)', line)
             if m:
-                metrics["total_latency_mean"] = float(m.group(1))
+                per_module.setdefault(m.group(1), {})["total_latency_mean"] = float(m.group(2))
                 continue
 
-    # If mean scalars weren't recorded separately, compute from vci data
-    # (handled in parse_vci below if needed)
+    # Normalize full module path to just the device[index] label.
+    # e.g. "SimpleEdgeCloudEnvironment.cloudNodes[0].supervisor" -> "cloudNodes[0]"
+    # e.g. "SimpleEdgeCloudEnvironment.cloudNodes[0].si10"       -> "cloudNodes[0]"
+    def short_label(full_path):
+        parts = full_path.split(".")
+        return parts[1] if len(parts) >= 2 else full_path
 
-    return metrics
+    # Merge all sub-module data into one dict per device label
+    per_sink = {}
+    for mod, data in per_module.items():
+        label = short_label(mod)
+        if label not in per_sink:
+            per_sink[label] = {}
+        per_sink[label].update({k: v for k, v in data.items() if v is not None})
+
+    # Keep only entries that have sink-level data (count)
+    per_sink = {label: data for label, data in per_sink.items() if "count" in data}
+
+    return _aggregate_metrics(per_sink), per_sink
+
+
+def _aggregate_metrics(sink_modules):
+    """Aggregate per-sink dicts into one dict (sum counts, weighted means)."""
+    empty = {k: None for k in [
+        "count", "e2e_mean", "e2e_stddev", "e2e_min", "e2e_max",
+        "e2e_p99", "processing_mean", "network_mean", "total_latency_mean"
+    ]}
+    if not sink_modules:
+        return empty
+
+    total_count = sum(d.get("count", 0) or 0 for d in sink_modules.values())
+
+    def weighted_mean(key):
+        pairs = [(d.get("count", 0) or 0, d[key])
+                 for d in sink_modules.values() if d.get(key) is not None]
+        w = sum(c for c, _ in pairs)
+        return sum(c * v for c, v in pairs) / w if w else None
+
+    def safe_min(key):
+        vals = [d[key] for d in sink_modules.values() if d.get(key) is not None]
+        return min(vals) if vals else None
+
+    def safe_max(key):
+        vals = [d[key] for d in sink_modules.values() if d.get(key) is not None]
+        return max(vals) if vals else None
+
+    return {
+        "count":              total_count,
+        "e2e_mean":           weighted_mean("e2e_mean"),
+        "e2e_stddev":         weighted_mean("e2e_stddev"),
+        "e2e_min":            safe_min("e2e_min"),
+        "e2e_max":            safe_max("e2e_max"),
+        "e2e_p99":            weighted_mean("e2e_p99"),
+        "processing_mean":    weighted_mean("processing_mean"),
+        "network_mean":       weighted_mean("network_mean"),
+        "total_latency_mean": weighted_mean("total_latency_mean"),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -222,64 +256,87 @@ def parse_sca(sca_path):
 
 def parse_vci(vci_path):
     """
-    The .vci file contains vector metadata including min/max and
-    the inline summary stats embedded in the data lines.
-
-    Line format in .vci data section:
-    <vecId> <startEventNum> <startOffset> <startTime> <endTime>
-            <count> <min> <mean> <sum> <sumSq>
-
-    We identify vectors by their title from attr lines.
+    Fallback: read vector means from .vci when not present in .sca.
+    Returns (aggregated_means, per_sink) matching the parse_sca shape,
+    but only for the three latency means (no count/e2e stats here).
     """
-    vector_means = {
-        "processing_mean":    None,
-        "network_mean":       None,
-        "total_latency_mean": None,
+    empty_agg = {
+        "processing_mean": None, "network_mean": None, "total_latency_mean": None
     }
+    empty = (empty_agg, {})
 
     if not os.path.exists(vci_path):
-        return vector_means
+        return empty
 
-    # Map vecId → title
-    vec_titles = {}
+    # Map vecId -> (module, title)
+    vec_info = {}
     current_vec_id = None
+
+    # per-module accumulation
+    per_module = {}   # module -> {processing_mean, network_mean, total_latency_mean}
 
     with open(vci_path, "r") as f:
         for line in f:
             line = line.strip()
 
             # vector declaration: "vector <id> <module> <name> TV"
-            m = re.match(r'^vector\s+(\d+)\s+\S+\s+(\S+)\s+TV', line)
+            m = re.match(r'^vector\s+(\d+)\s+(\S+)\s+(\S+)\s+TV', line)
             if m:
                 current_vec_id = int(m.group(1))
-                vec_titles[current_vec_id] = m.group(2)
+                vec_info[current_vec_id] = {"module": m.group(2), "title": m.group(3).lower()}
                 continue
 
-            # attr title line
+            # attr title override
             m = re.match(r'^attr\s+title\s+"(.+)"', line)
             if m and current_vec_id is not None:
-                vec_titles[current_vec_id] = m.group(1).lower()
+                vec_info[current_vec_id]["title"] = m.group(1).lower()
                 continue
 
-            # data summary line: starts with a number (vecId)
-            # format: vecId  startEvt  offset  startT  endT  count  min  mean  sum  sumsq
+            # data summary line
             parts = line.split()
             if len(parts) >= 9:
                 try:
-                    vid  = int(parts[0])
-                    mean = float(parts[7])
-                    title = vec_titles.get(vid, "").lower()
+                    vid   = int(parts[0])
+                    mean  = float(parts[7])
+                    info  = vec_info.get(vid, {})
+                    title = info.get("title", "")
+                    mod   = info.get("module", "unknown")
 
+                    per_module.setdefault(mod, {})
                     if "processing" in title and "total" not in title:
-                        vector_means["processing_mean"] = mean
+                        per_module[mod]["processing_mean"] = mean
                     elif "transmission" in title or "network" in title:
-                        vector_means["network_mean"] = mean
+                        per_module[mod]["network_mean"] = mean
                     elif "total" in title:
-                        vector_means["total_latency_mean"] = mean
+                        per_module[mod]["total_latency_mean"] = mean
                 except (ValueError, IndexError):
                     pass
 
-    return vector_means
+    if not per_module:
+        return empty
+
+    def short_label(full_path):
+        parts = full_path.split(".")
+        return parts[1] if len(parts) >= 2 else full_path
+
+    per_sink = {}
+    for mod, data in per_module.items():
+        label = short_label(mod)
+        if label not in per_sink:
+            per_sink[label] = {}
+        per_sink[label].update({k: v for k, v in data.items() if v is not None})
+
+    # Aggregate (no counts available here, so plain average)
+    def plain_mean(key):
+        vals = [d[key] for d in per_module.values() if d.get(key) is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    agg = {
+        "processing_mean":    plain_mean("processing_mean"),
+        "network_mean":       plain_mean("network_mean"),
+        "total_latency_mean": plain_mean("total_latency_mean"),
+    }
+    return agg, per_sink
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -418,7 +475,8 @@ def write_csv(row, csv_path):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def write_markdown(ini_data, metrics, topo_string, placements,
-                   timestamp, md_path, total_rates=None, sources_per_device=None):
+                   timestamp, md_path, total_rates=None, sources_per_device=None,
+                   per_sink=None):
     """Write a detailed Markdown report for this run."""
 
     os.makedirs(os.path.dirname(md_path), exist_ok=True)
@@ -448,6 +506,27 @@ def write_markdown(ini_data, metrics, topo_string, placements,
     for p in placements:
         placement_table += f"| {p['task']} | {p['type']} | {p['device']} | {p['range']} |\n"
 
+    # Per-sink breakdown table (only shown when there are 2+ sinks)
+    per_sink_section = []
+    if per_sink and len(per_sink) > 1:
+        per_sink_section = [
+            f"## Results per Sink",
+            f"",
+            f"| Sink | Events | E2E Mean | E2E P99 | Processing Mean | Link Latency Mean | Total Latency Mean |",
+            f"|------|--------|----------|---------|-----------------|-------------------|--------------------|",
+        ]
+        for label, sm in sorted(per_sink.items()):
+            per_sink_section.append(
+                f"| {label} "
+                f"| {sm.get('count') or 'N/A'} "
+                f"| {fmt(sm.get('e2e_mean'))} s "
+                f"| {fmt(sm.get('e2e_p99'))} s "
+                f"| {fmt(sm.get('processing_mean'))} s "
+                f"| {fmt(sm.get('network_mean'))} s "
+                f"| {fmt(sm.get('total_latency_mean'))} s |"
+            )
+        per_sink_section += [f"", f"---", f""]
+
     lines = [
         f"# Run Report: {ini_data['config']}",
         f"",
@@ -476,7 +555,8 @@ def write_markdown(ini_data, metrics, topo_string, placements,
         placement_table,
         f"---",
         f"",
-        f"## Results",
+        *per_sink_section,
+        f"## Results (Aggregated)",
         f"",
         f"| Metric | Value |",
         f"|--------|-------|",
@@ -558,7 +638,7 @@ def main():
         print(f"ERROR: {sca_path} not found.")
         return
 
-    metrics = parse_sca(sca_path)
+    metrics, per_sink = parse_sca(sca_path)
 
     # Fill in means from vci if not found in sca
     if any(v is None for v in [
@@ -567,12 +647,20 @@ def main():
         metrics["total_latency_mean"]
     ]):
         print(f"      (reading vector means from {vci_name}...)")
-        vci_means = parse_vci(vci_path)
-        metrics["processing_mean"]    = metrics["processing_mean"]    or vci_means["processing_mean"]
-        metrics["network_mean"]       = metrics["network_mean"]       or vci_means["network_mean"]
-        metrics["total_latency_mean"] = metrics["total_latency_mean"] or vci_means["total_latency_mean"]
+        vci_agg, vci_per_sink = parse_vci(vci_path)
+        metrics["processing_mean"]    = metrics["processing_mean"]    or vci_agg["processing_mean"]
+        metrics["network_mean"]       = metrics["network_mean"]       or vci_agg["network_mean"]
+        metrics["total_latency_mean"] = metrics["total_latency_mean"] or vci_agg["total_latency_mean"]
+        # merge per_sink latency means if sca didn't have them
+        for label, sm in vci_per_sink.items():
+            per_sink.setdefault(label, {})
+            for key in ("processing_mean", "network_mean", "total_latency_mean"):
+                if per_sink[label].get(key) is None:
+                    per_sink[label][key] = sm.get(key)
 
     print(f"      Events: {metrics['count']}  |  E2E mean: {metrics['e2e_mean']}s  |  P99: {metrics['e2e_p99']}s")
+    if len(per_sink) > 1:
+        print(f"      Sinks detected: {', '.join(sorted(per_sink.keys()))}")
 
     # ── 3. Parse topology ─────────────────────────────────────────────────────
     print(f"\n[3/5] Reading topology...")
@@ -614,7 +702,8 @@ def main():
     md_path     = os.path.join(REPORTS_DIR, md_filename)
     total_rates, sources_per_device = compute_device_total_rates(ini_data, placements)
     write_markdown(ini_data, metrics, topo_string, placements,
-                   timestamp, md_path, total_rates, sources_per_device)
+                   timestamp, md_path, total_rates, sources_per_device,
+                   per_sink=per_sink)
 
     print(f"\n{'='*50}")
     print(f"  Done!")
