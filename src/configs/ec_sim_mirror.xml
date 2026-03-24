@@ -1,8 +1,8 @@
 <config>
-	<interface hosts="stargazer3" address="10.0.0.2"/>
+	<interface hosts="cloudNodes*" address="10.0.0.x"/>
 	<interface hosts="pi2Bs*" address="10.0.2.x"/>
 	<interface hosts="pi3Bs*" address="10.0.3.x"/>
-	<interface hosts="albacore5" towards="stargazer3" address="10.0.0.x"/>
+	<interface hosts="albacore5" towards="cloudNodes*" address="10.0.0.x"/>
 	<interface hosts="albacore5" towards="pi2Bs*" address="10.0.2.x"/>
 	<interface hosts="albacore5" towards="pi3Bs*" address="10.0.3.x"/>
 	<interface hosts="albacore5*" address="10.1.x.x"/>

@@ -1,0 +1,6 @@
+# Two parallel pipelines: so1->op1->si1 and so2->op2->si2
+# Each pipeline ends at a different cloud node (cloudNodes[0] and cloudNodes[1])
+so1 op1 1
+op1 si1 1
+so2 op2 1
+op2 si2 1

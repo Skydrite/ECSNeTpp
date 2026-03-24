@@ -51,6 +51,7 @@ network SimpleEdgeCloudEnvironment
         bool hasGlobalSupervisor = default(true);
         int numPiModel2Bs = default(4);
         int numPiModel3Bs = default(4);
+        int numCloudNodes = default(1);
         string mediumType = default("IdealRadioMedium");
         string cloudAddress = default("");
         @display("bgb=884.304,707.72797");
@@ -59,7 +60,7 @@ network SimpleEdgeCloudEnvironment
         {
             delay = 0;
             datarate = eToCDatarate;
-            //cost = 1.2
+            //cost = 0.2 //
         }
 
         channel E2C_high extends DatarateChannel
@@ -70,7 +71,7 @@ network SimpleEdgeCloudEnvironment
     submodules:
         pi2Bs[numPiModel2Bs]: RaspberryPiModel2B;
         pi3Bs[numPiModel3Bs]: RaspberryPiModel3B;
-        stargazer3: CloudNodeA {
+        cloudNodes[numCloudNodes]: CloudNodeA {
             @display("p=246.35199,131.008,r");
         }
         albacore5: Router {
@@ -101,7 +102,9 @@ network SimpleEdgeCloudEnvironment
             @display("p=24.208,41.295998");
         }
     connections:
-        stargazer3.ethg++ <--> E2C_high <--> albacore5.ethg++;
+        for i=0..numCloudNodes-1 {
+            cloudNodes[i].ethg++ <--> E2C_high <--> albacore5.ethg++;
+        }
         albacore5.ethg++ <--> E2C_low <--> area1AP1.ethg++;
 
 }
