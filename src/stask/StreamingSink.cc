@@ -40,6 +40,14 @@ void StreamingSink::initialize() {
     if (cpuCores < 1) {
         throw new cRuntimeError("Number of CPU Cores is not set.");
     }
+
+    // Read costPerGB from the cloud node's outgoing Ethernet channel
+    cGate* ethOut = getParentModule()->gate("ethg$o", 0);
+    cChannel* chan = ethOut ? ethOut->getChannel() : nullptr;
+    if (chan && chan->hasPar("costPerGB")) {
+        costPerGB = chan->par("costPerGB").doubleValue();
+    }
+    EV << getFullPath() << ": link costPerGB = " << costPerGB << " USD/GB" << endl;
 //    calculateDelay();
 }
 
@@ -57,8 +65,7 @@ void StreamingSink::handleMessage(cMessage *msg) {
         e2eLatencies.push_back(e2e);
         emit(edgeProcessingTimeSignal, pk->getEdgeProcessingDelay());
         emit(receivedStreamingMsgsSignal, pk);
-//        std::cout << " CPU proc delay: " << pk->getEdgeProcessingDelay() << " : " <<  pk->getProcessingDelay() << endl;
-//        std::cout << "##Finished Processing. Msg size (Bytes): " << pk->getByteLength() << " (Bits): " << pk->getBitLength() << endl;
+        totalBytesReceived += pk->getByteLength();
 
 //        sendAck(msg);
         delete msg;
@@ -94,5 +101,13 @@ void StreamingSink::handleMessage(cMessage *msg) {
             int idx = (int)std::ceil(0.99 * e2eLatencies.size()) - 1;
             emit(e2eP99Signal, e2eLatencies[idx]);
         }
+
+        double totalGB = totalBytesReceived / 1e9;
+        double totalCostUSD = totalGB * costPerGB;
+        emit(linkCostSignal, totalCostUSD);
+        EV << getFullPath() << ": total bytes received = " << totalBytesReceived
+           << " B (" << totalGB << " GB)"
+           << ", link cost = $" << totalCostUSD << " USD"
+           << " (@ $" << costPerGB << "/GB)" << endl;
     }
 } /* namespace ecsnetpp */

@@ -24,6 +24,7 @@ simsignal_t ISTask::latencySignal = registerSignal("latency");
 simsignal_t ISTask::transmissionTimeSignal = registerSignal("transmissionTime");
 simsignal_t ISTask::processingTimeSignal = registerSignal("processingTime");
 simsignal_t ISTask::edgeProcessingTimeSignal = registerSignal("edgeProcessingTime");
+simsignal_t ISTask::linkCostSignal = registerSignal("linkCost");
 
 void ISTask::sendAck(cMessage* msg) {
 //     send ack

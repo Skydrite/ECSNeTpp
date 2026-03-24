@@ -36,6 +36,7 @@ public:
     static simsignal_t transmissionTimeSignal;
     static simsignal_t processingTimeSignal;
     static simsignal_t edgeProcessingTimeSignal;
+    static simsignal_t linkCostSignal;
 
 protected:
     const char* mySenders;

@@ -30,7 +30,8 @@ CSV_COLUMNS = [
     "freq_hz",
     "events_completed", "e2e_mean_s", "e2e_stddev_s",
     "e2e_min_s", "e2e_max_s", "e2e_p99_s",
-    "processing_mean_s", "link_latency_mean_s", "total_latency_mean_s"
+    "processing_mean_s", "link_latency_mean_s", "total_latency_mean_s",
+    "link_cost_usd"
 ]
 
 
@@ -153,6 +154,13 @@ def parse_sca(sca_path):
                 per_module.setdefault(mod, {})["e2e_p99"] = float(m.group(2))
                 continue
 
+            # linkCost scalar — keyed by module
+            m = re.match(r'^scalar\s+(\S+)\s+linkCost:last\s+([\d.eE+\-]+)', line)
+            if m:
+                mod = m.group(1)
+                per_module.setdefault(mod, {})["link_cost"] = float(m.group(2))
+                continue
+
             # statistic block header  — captures module + stat name
             m = re.match(r'^statistic\s+(\S+)\s+(\S+)', line)
             if m:
@@ -216,7 +224,8 @@ def _aggregate_metrics(sink_modules):
     """Aggregate per-sink dicts into one dict (sum counts, weighted means)."""
     empty = {k: None for k in [
         "count", "e2e_mean", "e2e_stddev", "e2e_min", "e2e_max",
-        "e2e_p99", "processing_mean", "network_mean", "total_latency_mean"
+        "e2e_p99", "processing_mean", "network_mean", "total_latency_mean",
+        "link_cost"
     ]}
     if not sink_modules:
         return empty
@@ -247,6 +256,7 @@ def _aggregate_metrics(sink_modules):
         "processing_mean":    weighted_mean("processing_mean"),
         "network_mean":       weighted_mean("network_mean"),
         "total_latency_mean": weighted_mean("total_latency_mean"),
+        "link_cost":          sum(d.get("link_cost") or 0 for d in sink_modules.values()) or None,
     }
 
 
@@ -512,8 +522,8 @@ def write_markdown(ini_data, metrics, topo_string, placements,
         per_sink_section = [
             f"## Results per Sink",
             f"",
-            f"| Sink | Events | E2E Mean | E2E P99 | Processing Mean | Link Latency Mean | Total Latency Mean |",
-            f"|------|--------|----------|---------|-----------------|-------------------|--------------------|",
+            f"| Sink | Events | E2E Mean | E2E P99 | Processing Mean | Link Latency Mean | Total Latency Mean | Link Cost |",
+            f"|------|--------|----------|---------|-----------------|-------------------|--------------------|-----------|",
         ]
         for label, sm in sorted(per_sink.items()):
             per_sink_section.append(
@@ -523,7 +533,8 @@ def write_markdown(ini_data, metrics, topo_string, placements,
                 f"| {fmt(sm.get('e2e_p99'))} s "
                 f"| {fmt(sm.get('processing_mean'))} s "
                 f"| {fmt(sm.get('network_mean'))} s "
-                f"| {fmt(sm.get('total_latency_mean'))} s |"
+                f"| {fmt(sm.get('total_latency_mean'))} s "
+                f"| ${fmt(sm.get('link_cost'), 6)} |"
             )
         per_sink_section += [f"", f"---", f""]
 
@@ -569,6 +580,7 @@ def write_markdown(ini_data, metrics, topo_string, placements,
         f"| Processing Mean | {fmt(metrics['processing_mean'])} s |",
         f"| Link Latency Mean | {fmt(metrics['network_mean'])} s |",
         f"| Total Latency Mean | {fmt(metrics['total_latency_mean'])} s |",
+        f"| Link Cost (Total) | ${fmt(metrics['link_cost'], 6)} USD |",
         f"",
         f"---",
         f"",
@@ -692,8 +704,9 @@ def main():
         "e2e_max_s":            metrics["e2e_max"],
         "e2e_p99_s":            metrics["e2e_p99"],
         "processing_mean_s":    metrics["processing_mean"],
-        "link_latency_mean_s":       metrics["network_mean"],
-        "total_latency_mean_s": metrics["total_latency_mean"]
+        "link_latency_mean_s":  metrics["network_mean"],
+        "total_latency_mean_s": metrics["total_latency_mean"],
+        "link_cost_usd":        metrics["link_cost"]
     }
     write_csv(csv_row, CSV_FILE)
 

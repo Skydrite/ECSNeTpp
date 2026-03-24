@@ -47,6 +47,8 @@ network SimpleEdgeCloudEnvironment
         double eToCDelayMean @unit(ms) = default(0ms);
         double eToCDelayStdev @unit(ms) = default(0ms);
         double eToCDatarate @unit(bps) = default(1Gbps);
+        double edgeLinkCostPerGB = default(0.0);   // USD per GB (edge <-> router)
+        double cloudLinkCostPerGB = default(0.0);  // USD per GB (cloud <-> router)
         bool ackersEnabled = default(false);
         bool hasGlobalSupervisor = default(true);
         int numPiModel2Bs = default(4);
@@ -60,13 +62,14 @@ network SimpleEdgeCloudEnvironment
         {
             delay = 0;
             datarate = eToCDatarate;
-            //cost = 0.2 //
+            double costPerGB = edgeLinkCostPerGB;  // USD per GB
         }
 
         channel E2C_high extends DatarateChannel
         {
             delay = eToCDelayMean;
             datarate = eToCDatarate;
+            double costPerGB = cloudLinkCostPerGB; // USD per GB
         }
     submodules:
         pi2Bs[numPiModel2Bs]: RaspberryPiModel2B;

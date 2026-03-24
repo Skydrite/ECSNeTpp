@@ -33,6 +33,8 @@ private:
     // Collecting 99th percentile latency for end-to-end latency (network + processing) for each STask category
     std::vector<double> e2eLatencies;
     simsignal_t e2eP99Signal;
+    double costPerGB = 0.0;
+    long totalBytesReceived = 0;
 
 };
 

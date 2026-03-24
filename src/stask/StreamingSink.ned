@@ -31,6 +31,13 @@ simple StreamingSink like ISTask
             record=last;
             unit=s
         );
+        @signal[linkCost](type=double);
+        @statistic[linkCost](
+            title="Link Cost";
+            source=linkCost;
+            record=last;
+            unit=USD
+        );
         @statistic[rcvdStreamingMsgsStat](title="packets received"; source=receivedStreamingMsgs; record=count,"sum(packetBytes)","vector(packetBytes)"; interpolationmode=none);
         @statistic[throughput](title="throughput"; unit=bps; source="throughput(receivedStreamingMsgs)"; record=vector);
         @statistic[rcvdStreamingMsgsCount](title="Streaming Msg Count"; source=receivedStreamingMsgs; record=count);
