@@ -39,18 +39,45 @@ CSV_COLUMNS = [
 # 1. Parse omnetpp.ini
 # ─────────────────────────────────────────────────────────────────────────────
 
-def parse_ini(ini_path):
+def find_latest_run(results_dir):
     """
-    Extract from omnetpp.ini:
-      - active config name (last [Config ...] block that isn't 'defaultplan')
-      - description
-      - freq value from ${freq=...}
-      - allocationPlanFile path
-      - dspTopologyFile path
-      - per-device fixedSourceEventRate values
+    Scan results/ for the most recently modified .sca file and extract
+    (config_name, freq) from its filename.
+    Filename pattern: {config}-freq={freq}-#0.sca
+    Returns (config_name, freq_str) or (None, None) if nothing found.
+    """
+    pattern = re.compile(r'^(.+)-freq=(\d+)-#\d+\.sca$')
+    candidates = []
+
+    if not os.path.isdir(results_dir):
+        return None, None
+
+    for fname in os.listdir(results_dir):
+        m = pattern.match(fname)
+        if m:
+            fpath = os.path.join(results_dir, fname)
+            candidates.append((os.path.getmtime(fpath), m.group(1), m.group(2)))
+
+    if not candidates:
+        return None, None
+
+    candidates.sort(reverse=True)  # newest first
+    _, config_name, freq = candidates[0]
+    return config_name, freq
+
+
+def parse_ini(ini_path, target_config=None):
+    """
+    Extract from omnetpp.ini for a specific config (target_config).
+    If target_config is None, falls back to the last non-default config in the file.
+
+    Reads:
+      - description, allocationPlanFile, dspTopologyFile, fixedSourceEventRate
+        only from the target config section.
+      - freq from ${freq=...} anywhere in the file (defined globally in defaultplan).
     """
     result = {
-        "config": None,
+        "config": target_config,
         "description": None,
         "freq": None,
         "allocation_file": None,
@@ -59,6 +86,7 @@ def parse_ini(ini_path):
     }
 
     current_config = None
+    in_target = False  # True when we're inside the target config section
 
     with open(ini_path, "r") as f:
         for line in f:
@@ -68,33 +96,36 @@ def parse_ini(ini_path):
             m = re.match(r'^\[Config\s+(.+?)\]', line)
             if m:
                 current_config = m.group(1).strip()
-                # Use the last non-default config as the active one
-                if current_config.lower() != "defaultplan":
+                if target_config is None and current_config.lower() != "defaultplan":
                     result["config"] = current_config
+                in_target = (current_config == result["config"])
                 continue
 
             # Skip comments and empty lines
             if not line or line.startswith("#"):
                 continue
 
-            # description
-            m = re.match(r'^description\s*=\s*(.+)', line)
-            if m and current_config == result["config"]:
-                result["description"] = m.group(1).strip()
-                continue
-
-            # freq from ${freq=...}
+            # freq from ${freq=...} — defined globally, read from anywhere
             if result["freq"] is None:
                 m = re.search(r'\$\{freq=(\d+)\}', line)
                 if m:
                     result["freq"] = m.group(1)
                     continue
 
+            # Everything below is scoped to the target config section only
+            if not in_target:
+                continue
+
+            # description
+            m = re.match(r'^description\s*=\s*(.+)', line)
+            if m:
+                result["description"] = m.group(1).strip()
+                continue
+
             # allocationPlanFile
             m = re.match(r'^\*\.taskbuilder\.allocationPlanFile\s*=\s*"?(.+?)"?\s*$', line)
             if m:
                 path = m.group(1).strip().strip('"')
-                # resolve relative to simulations/
                 result["allocation_file"] = os.path.normpath(
                     os.path.join(os.path.dirname(ini_path), path)
                 )
@@ -109,21 +140,17 @@ def parse_ini(ini_path):
                 )
                 continue
 
-            # per-device fixedSourceEventRate
-            # e.g. *.pi3Bs[0].fixedSourceEventRate = 5
+            # per-device fixedSourceEventRate  e.g. *.pi3Bs[0].fixedSourceEventRate = 5
             m = re.match(r'^\*\.(\w+)\[(\d+)\]\.fixedSourceEventRate\s*=\s*(\d+)', line)
             if m:
                 device = f"{m.group(1)}[{m.group(2)}]"
-                rate   = int(m.group(3))
-                result["event_rates"][device] = rate
+                result["event_rates"][device] = int(m.group(3))
                 continue
 
-            # global fixedSourceEventRate (wildcard)
+            # wildcard fixedSourceEventRate
             m = re.match(r'^\*\.(\w+)\[\*\]\.fixedSourceEventRate\s*=\s*(\d+)', line)
             if m:
-                key  = f"{m.group(1)}[*]"
-                rate = int(m.group(2))
-                result["event_rates"][key] = rate
+                result["event_rates"][f"{m.group(1)}[*]"] = int(m.group(2))
                 continue
 
     return result
@@ -207,17 +234,24 @@ def parse_sca(sca_path):
         return parts[1] if len(parts) >= 2 else full_path
 
     # Merge all sub-module data into one dict per device label
-    per_sink = {}
+    per_device = {}
     for mod, data in per_module.items():
         label = short_label(mod)
-        if label not in per_sink:
-            per_sink[label] = {}
-        per_sink[label].update({k: v for k, v in data.items() if v is not None})
+        if label not in per_device:
+            per_device[label] = {}
+        per_device[label].update({k: v for k, v in data.items() if v is not None})
 
-    # Keep only entries that have sink-level data (count)
-    per_sink = {label: data for label, data in per_sink.items() if "count" in data}
+    # Total link cost = sum across ALL devices (sinks + operators)
+    all_link_cost = sum(
+        d["link_cost"] for d in per_device.values() if d.get("link_cost") is not None
+    ) or None
 
-    return _aggregate_metrics(per_sink), per_sink
+    # Keep only entries that have sink-level data (count) for per-sink breakdown
+    per_sink = {label: data for label, data in per_device.items() if "count" in data}
+
+    agg = _aggregate_metrics(per_sink)
+    agg["link_cost"] = all_link_cost  # override: include operator hop costs
+    return agg, per_sink
 
 
 def _aggregate_metrics(sink_modules):
@@ -628,7 +662,17 @@ def main():
         print(f"ERROR: {INI_FILE} not found. Run from simulations/ directory.")
         return
 
-    ini_data = parse_ini(INI_FILE)
+    # Detect which config was actually run from the newest .sca file
+    latest_config, latest_freq = find_latest_run(RESULTS_DIR)
+    if latest_config:
+        print(f"      Detected last run: config={latest_config}, freq={latest_freq}")
+
+    ini_data = parse_ini(INI_FILE, target_config=latest_config)
+
+    # If freq was found in the sca filename, prefer that (it's authoritative)
+    if latest_freq:
+        ini_data["freq"] = latest_freq
+
     print(f"      Config:      {ini_data['config']}")
     print(f"      Description: {ini_data['description']}")
     print(f"      Freq:        {ini_data['freq']} Hz")

@@ -47,12 +47,15 @@ network SimpleEdgeCloudEnvironment
         double eToCDelayMean @unit(ms) = default(0ms);
         double eToCDelayStdev @unit(ms) = default(0ms);
         double eToCDatarate @unit(bps) = default(1Gbps);
-        double edgeLinkCostPerGB = default(0.0);   // USD per GB (edge <-> router)
-        double cloudLinkCostPerGB = default(0.0);  // USD per GB (cloud <-> router)
+        double edgeLinkCostPerGB = default(0.0);     // USD per GB (edge <-> router)
+        double transitLinkCostPerGB = default(0.0); // USD per GB (transit <-> router)
+        double cloudLinkCostPerGB = default(0.0);   // USD per GB (cloud <-> router)
+        double transitDelayMean @unit(ms) = default(0ms);
         bool ackersEnabled = default(false);
         bool hasGlobalSupervisor = default(true);
         int numPiModel2Bs = default(4);
         int numPiModel3Bs = default(4);
+        int numTransitNodes = default(0);
         int numCloudNodes = default(1);
         string mediumType = default("IdealRadioMedium");
         string cloudAddress = default("");
@@ -65,6 +68,13 @@ network SimpleEdgeCloudEnvironment
             double costPerGB = edgeLinkCostPerGB;  // USD per GB
         }
 
+        channel E2Trans_link extends DatarateChannel
+        {
+            delay = transitDelayMean;              // near-edge: low latency
+            datarate = eToCDatarate;
+            double costPerGB = transitLinkCostPerGB; // USD per GB
+        }
+
         channel E2C_high extends DatarateChannel
         {
             delay = eToCDelayMean;
@@ -74,6 +84,9 @@ network SimpleEdgeCloudEnvironment
     submodules:
         pi2Bs[numPiModel2Bs]: RaspberryPiModel2B;
         pi3Bs[numPiModel3Bs]: RaspberryPiModel3B;
+        transitNodes[numTransitNodes]: CloudNodeA {
+            @display("p=150.0,200.0,r");
+        }
         cloudNodes[numCloudNodes]: CloudNodeA {
             @display("p=246.35199,131.008,r");
         }
@@ -105,6 +118,9 @@ network SimpleEdgeCloudEnvironment
             @display("p=24.208,41.295998");
         }
     connections:
+        for i=0..numTransitNodes-1 {
+            transitNodes[i].ethg++ <--> E2Trans_link <--> albacore5.ethg++;
+        }
         for i=0..numCloudNodes-1 {
             cloudNodes[i].ethg++ <--> E2C_high <--> albacore5.ethg++;
         }

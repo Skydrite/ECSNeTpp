@@ -1,0 +1,98 @@
+<?xml version="1.0" ?>
+<devices>
+    <!-- Edge tier: sources -->
+    <device>
+        <name>pi3Bs</name>
+        <index-range>0</index-range>
+        <tasks>
+            <task>
+                <name>so1</name>
+                <category>so1</category>
+                <type>ecsnetpp.stask.StreamingSource</type>
+                <processingdelay><measuredtime>50000000</measuredtime></processingdelay>
+                <msgsize>6880</msgsize>
+                <sourceevdistribution>
+                    <name>FixedSourceEventRateDistribution</name>
+                    <type>ecsnetpp.model.source.eventrate.FixedSourceEventRateDistribution</type>
+                </sourceevdistribution>
+            </task>
+        </tasks>
+    </device>
+    <device>
+        <name>pi3Bs</name>
+        <index-range>2</index-range>
+        <tasks>
+            <task>
+                <name>so2</name>
+                <category>so2</category>
+                <type>ecsnetpp.stask.StreamingSource</type>
+                <processingdelay><measuredtime>50000000</measuredtime></processingdelay>
+                <msgsize>6880</msgsize>
+                <sourceevdistribution>
+                    <name>FixedSourceEventRateDistribution</name>
+                    <type>ecsnetpp.model.source.eventrate.FixedSourceEventRateDistribution</type>
+                </sourceevdistribution>
+            </task>
+        </tasks>
+    </device>
+
+    <!-- Edge tier: local operators (pre-aggregation at edge) -->
+    <device>
+        <name>pi3Bs</name>
+        <index-range>1</index-range>
+        <tasks>
+            <task>
+                <name>edgeOp1</name>
+                <category>edgeOp1</category>
+                <type>ecsnetpp.stask.StreamingOperator</type>
+                <processingdelay><measuredtime>748722</measuredtime></processingdelay>
+                <selectivity>1</selectivity>
+                <productivity>1</productivity>
+            </task>
+        </tasks>
+    </device>
+    <device>
+        <name>pi3Bs</name>
+        <index-range>3</index-range>
+        <tasks>
+            <task>
+                <name>edgeOp2</name>
+                <category>edgeOp2</category>
+                <type>ecsnetpp.stask.StreamingOperator</type>
+                <processingdelay><measuredtime>748722</measuredtime></processingdelay>
+                <selectivity>1</selectivity>
+                <productivity>1</productivity>
+            </task>
+        </tasks>
+    </device>
+
+    <!-- Transit tier: aggregation operator at transit node -->
+    <device>
+        <name>transitNodes</name>
+        <index-range>0</index-range>
+        <tasks>
+            <task>
+                <name>transitOp</name>
+                <category>transitOp</category>
+                <type>ecsnetpp.stask.StreamingOperator</type>
+                <processingdelay><measuredtime>748722</measuredtime></processingdelay>
+                <selectivity>1</selectivity>
+                <productivity>1</productivity>
+            </task>
+        </tasks>
+    </device>
+
+    <!-- Cloud tier: destination sink -->
+    <device>
+        <name>cloudNodes</name>
+        <index-range>0</index-range>
+        <tasks>
+            <task>
+                <name>si</name>
+                <category>si</category>
+                <type>ecsnetpp.stask.StreamingSink</type>
+                <processingdelay><measuredtime>195424</measuredtime></processingdelay>
+            </task>
+        </tasks>
+    </device>
+</devices>

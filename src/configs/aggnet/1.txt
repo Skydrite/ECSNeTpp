@@ -1,0 +1,14 @@
+# 3-tier AggNet-style topology:
+#   Edge tier:    so1 -> edgeOp1
+#                 so2 -> edgeOp2
+#   Transit tier: edgeOp1 -> transitOp
+#                 edgeOp2 -> transitOp
+#   Cloud tier:   transitOp -> si
+#
+# Placement: so1/so2 on pi3Bs[0]/pi3Bs[2], edgeOp1/edgeOp2 on pi3Bs[1]/pi3Bs[3],
+#            transitOp on transitNodes[0], si on cloudNodes[0]
+so1 edgeOp1 1
+so2 edgeOp2 1
+edgeOp1 transitOp 1
+edgeOp2 transitOp 1
+transitOp si 1

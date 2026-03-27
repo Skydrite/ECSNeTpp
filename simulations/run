@@ -1,5 +1,5 @@
 #!/bin/sh
 cd `dirname $0`
-../ECSNeTpp -u Cmdenv -n .:../../ecsnetpp:../../inet-3.6.5/src:../src -f omnetpp.ini -c ETL-Pi3B-1-Plan
+../ECSNeTpp -u Cmdenv -n .:../../ecsnetpp:../../inet-3.6.5/src:../src -f omnetpp.ini -c AggNet-Simple
 
 python3 parse_results.py
