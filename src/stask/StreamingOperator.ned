@@ -20,6 +20,8 @@ simple StreamingOperator like ISTask
     parameters:
         string name = default("StreamingTask");
         @signal[cpuStateChanged](type=long);
+        @signal[linkCost](type=double);
+        @statistic[linkCost](title="Link Cost"; source=linkCost; record=last; unit=USD);
     gates:
         inout port[];
         input incomingStream[];

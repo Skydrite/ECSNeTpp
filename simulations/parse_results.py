@@ -112,8 +112,19 @@ def parse_ini(ini_path, target_config=None):
                     result["freq"] = m.group(1)
                     continue
 
-            # Everything below is scoped to the target config section only
+            # description and file paths are scoped to the target config section only
             if not in_target:
+                # But still read event rates from defaultplan (inherited by all configs)
+                if current_config and current_config.lower() == "defaultplan":
+                    m = re.match(r'^\*\.(\w+)\[(\d+)\]\.fixedSourceEventRate\s*=\s*(\d+)', line)
+                    if m:
+                        device = f"{m.group(1)}[{m.group(2)}]"
+                        result["event_rates"].setdefault(device, int(m.group(3)))
+                        continue
+                    m = re.match(r'^\*\.(\w+)\[\*\]\.fixedSourceEventRate\s*=\s*(\d+)', line)
+                    if m:
+                        result["event_rates"].setdefault(f"{m.group(1)}[*]", int(m.group(2)))
+                        continue
                 continue
 
             # description

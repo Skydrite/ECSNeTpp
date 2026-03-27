@@ -61,7 +61,7 @@ void StreamingSink::handleMessage(cMessage *msg) {
         emit(processingTimeSignal, _processingDelay);
 //        const omnetpp::SimTime _latency = simTime() - pk->getStartTime();
         emit(latencySignal, _networkDelay + _processingDelay);
-        double e2e = _networkDelay + _processingDelay;
+        double e2e = (simTime() - pk->getCreationTime()).dbl();
         e2eLatencies.push_back(e2e);
         emit(edgeProcessingTimeSignal, pk->getEdgeProcessingDelay());
         emit(receivedStreamingMsgsSignal, pk);

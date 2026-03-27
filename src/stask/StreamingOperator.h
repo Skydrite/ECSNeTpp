@@ -30,6 +30,8 @@ class StreamingOperator : public ISTask{
 private:
     int selectivityWindowLength;
     int selectivityWindowCount;
+    double costPerGB = 0.0;
+    long totalBytesForwarded = 0;
 protected:
     cQueue outgoingQueue;
     cQueue selectivityWindow;

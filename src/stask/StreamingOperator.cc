@@ -24,6 +24,8 @@ void StreamingOperator::finish() {
     if (!outgoingQueue.isEmpty()) {
         outgoingQueue.clear();
     }
+    double totalCostUSD = (totalBytesForwarded / 1e9) * costPerGB;
+    emit(linkCostSignal, totalCostUSD);
 }
 
 void StreamingOperator::initialize() {
@@ -74,13 +76,21 @@ void StreamingOperator::initialize() {
 
     timerMsg = new cMessage();
     timerMsg->setKind(2);
-//    calculateDelay();
+
+    // Read costPerGB from outgoing Ethernet channel (0 for WiFi/edge devices)
+    cGate* ethOut = nullptr;
+    if (getParentModule()->isGateVector("ethg") && getParentModule()->gateSize("ethg") > 0)
+        ethOut = getParentModule()->gate("ethg$o", 0);
+    cChannel* chan = ethOut ? ethOut->getChannel() : nullptr;
+    if (chan && chan->hasPar("costPerGB"))
+        costPerGB = chan->par("costPerGB").doubleValue();
 }
 
 void StreamingOperator::handleMessage(cMessage *msg) {
     // std::cout << "Test, entered handleMessage of " << getFullPath() << " (StreamingOperator) at time " << simTime() << endl;
     if (msg->arrivedOn("fromCPU")) {
         nextToSend = check_and_cast<StreamingMessage *>(msg);
+        totalBytesForwarded += nextToSend->getByteLength() * gateSize("outgoingStream");
         for (int i = 0; i < gateSize("outgoingStream"); i++) {
             send(nextToSend->dup(), "outgoingStream", i);
         }
