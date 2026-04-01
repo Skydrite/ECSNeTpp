@@ -1,0 +1,86 @@
+<?xml version="1.0" ?>
+<!-- SAFA-Default: topology-unaware placement (YARN-style).
+     Operators are assigned to cloud nodes — the "far" tier — as if
+     the scheduler only looked at resource availability, not WAN delay.
+     All links pay the E2C_high cost ($0.20/GB, 8.56ms delay). -->
+<devices>
+    <!-- Sources on edge Pi3Bs -->
+    <device>
+        <name>pi3Bs</name>
+        <index-range>0</index-range>
+        <tasks>
+            <task>
+                <name>so1</name>
+                <category>so1</category>
+                <type>ecsnetpp.stask.StreamingSource</type>
+                <processingdelay><measuredtime>50000000</measuredtime></processingdelay>
+                <msgsize>6880</msgsize>
+                <sourceevdistribution>
+                    <name>FixedSourceEventRateDistribution</name>
+                    <type>ecsnetpp.model.source.eventrate.FixedSourceEventRateDistribution</type>
+                </sourceevdistribution>
+            </task>
+        </tasks>
+    </device>
+    <device>
+        <name>pi3Bs</name>
+        <index-range>1</index-range>
+        <tasks>
+            <task>
+                <name>so2</name>
+                <category>so2</category>
+                <type>ecsnetpp.stask.StreamingSource</type>
+                <processingdelay><measuredtime>50000000</measuredtime></processingdelay>
+                <msgsize>6880</msgsize>
+                <sourceevdistribution>
+                    <name>FixedSourceEventRateDistribution</name>
+                    <type>ecsnetpp.model.source.eventrate.FixedSourceEventRateDistribution</type>
+                </sourceevdistribution>
+            </task>
+        </tasks>
+    </device>
+
+    <!-- Operators on CLOUD nodes (far, expensive — topology-unaware choice) -->
+    <device>
+        <name>cloudNodes</name>
+        <index-range>0</index-range>
+        <tasks>
+            <task>
+                <name>op1</name>
+                <category>op1</category>
+                <type>ecsnetpp.stask.StreamingOperator</type>
+                <processingdelay><measuredtime>748722</measuredtime></processingdelay>
+                <selectivity>1</selectivity>
+                <productivity>1</productivity>
+            </task>
+        </tasks>
+    </device>
+    <device>
+        <name>cloudNodes</name>
+        <index-range>1</index-range>
+        <tasks>
+            <task>
+                <name>op2</name>
+                <category>op2</category>
+                <type>ecsnetpp.stask.StreamingOperator</type>
+                <processingdelay><measuredtime>748722</measuredtime></processingdelay>
+                <selectivity>1</selectivity>
+                <productivity>1</productivity>
+            </task>
+        </tasks>
+    </device>
+
+    <!-- Sink on cloud node -->
+    <device>
+        <name>cloudNodes</name>
+        <index-range>2</index-range>
+        <tasks>
+            <task>
+                <name>si</name>
+                <category>si</category>
+                <type>ecsnetpp.stask.StreamingSink</type>
+                <processingdelay><measuredtime>195424</measuredtime></processingdelay>
+            </task>
+        </tasks>
+    </device>
+</devices>

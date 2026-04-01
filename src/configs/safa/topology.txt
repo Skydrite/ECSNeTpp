@@ -1,0 +1,11 @@
+# SAFA comparison topology: two independent pipelines sharing one sink
+# so1 -> op1 -> si
+# so2 -> op2 -> si
+#
+# Placement varies across scenarios (default.xml vs dcm.xml):
+#   SAFA-Default: op1/op2 placed on far cloud nodes  (topology-unaware, YARN-style)
+#   SAFA-DCM:    op1/op2 placed on near transit nodes (topology-aware, delay-minimising)
+so1 op1 1
+so2 op2 1
+op1 si 1
+op2 si 1

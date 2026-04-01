@@ -70,7 +70,7 @@ network SimpleEdgeCloudEnvironment
 
         channel E2Trans_link extends DatarateChannel
         {
-            delay = transitDelayMean;              // near-edge: low latency
+            delay = default(transitDelayMean);     // near-edge: overridable per node via ini
             datarate = eToCDatarate;
             double costPerGB = transitLinkCostPerGB; // USD per GB
         }
@@ -119,7 +119,7 @@ network SimpleEdgeCloudEnvironment
         }
     connections:
         for i=0..numTransitNodes-1 {
-            transitNodes[i].ethg++ <--> E2Trans_link <--> albacore5.ethg++;
+            transitNodes[i].ethg++ <--> E2Trans_link { delay = transitNodes[i].linkDelay; } <--> albacore5.ethg++;
         }
         for i=0..numCloudNodes-1 {
             cloudNodes[i].ethg++ <--> E2C_high <--> albacore5.ethg++;

@@ -36,6 +36,7 @@ module CloudNodeA extends StandardHost
         bool hasAcker = default(false);
         string ackerAddress = default("");
         bool isEdgeDevice = false;
+        double linkDelay @unit(s) = default(0s); // per-node WAN link delay, overridable via ini
         string cpuCoreSchedulerType = default("RoundRobinCpuCoreScheduler");
         @display("bgb=728.91003,656.82");
         @statistic[processingLatency](title="processingLatency"; source=processingTime; record=vector);
