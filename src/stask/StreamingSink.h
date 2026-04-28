@@ -35,6 +35,27 @@ private:
     simsignal_t e2eP99Signal;
     double costPerGB = 0.0;
     long totalBytesReceived = 0;
+    double slaLatency = 0.1; // seconds, read from parent CloudNodeA
+
+    // Periodic window reporting
+    cMessage* windowTimerMsg = nullptr;
+    static constexpr double WINDOW_INTERVAL_S = 5.0;
+    static constexpr int MAX_HOPS = 8;
+
+    // Per-path window stats keyed by path string "sourceLabel:hop0Label:hop1Label:..."
+    struct PathWindowStats {
+        std::vector<double> e2eLatencies;
+        std::vector<double> networkLatencies;
+        double hopLinkSum[MAX_HOPS]  = {};
+        double hopProcSum[MAX_HOPS]  = {};
+        double hopQueueSum[MAX_HOPS] = {};
+        int    hopCount[MAX_HOPS]    = {};
+        int    maxHops = 0;
+        double prevP99 = -1.0;  // kept across windows for trend tracking
+        std::string hopLabels[MAX_HOPS];
+        std::string sourceLabel;
+    };
+    std::map<std::string, PathWindowStats> pathStats;
 
 };
 

@@ -24,5 +24,8 @@ simple ECSBuilder
         @display("i=block/cogwheel_s");
         string allocationPlanFile;
         string dspTopologyFile;
+        // Total operator instances per category (1 active + N-1 dormant replicas).
+        // Set to 1 to disable replica generation entirely.
+        int replicasPerOperator = default(2);
 }
 

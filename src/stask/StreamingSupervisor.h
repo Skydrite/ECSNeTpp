@@ -37,6 +37,10 @@ private:
     std::map<std::string, std::vector<std::string>> senderStaskCategoryToDownstreamNodeMap;
     std::map<std::string, std::vector<inet::L3Address>> senderStaskCategoryToDownstreamNodeIPMap;
     std::map<std::string, std::vector<int>> senderToLocalGateMap;
+    // Per-category round-robin counter. Index advances on every forwarded message.
+    // NOTE: safe only while each sender maps to a single downstream category;
+    // if multi-category fan-out is ever needed, this must be keyed by (sender, destCat).
+    std::map<std::string, int> roundRobinCounters;
 
     simtime_t startTime = -1;
     int count = 0;
@@ -62,6 +66,10 @@ public:
             std::vector<std::string> downstreamNodeFullPaths);
     virtual void resolveDownstreamNodeIPs();
     virtual void addSenderToLocalGateMapping(std::string senderCategory, int gateIndex);
+    // Adds nodeIP as an additional destination for senderCategory (the routing key,
+    // i.e. the category of the task hosted on this node that sends to the replica).
+    // Resets the round-robin counter so load spreads evenly from this point.
+    void activateReplica(const std::string& senderCategory, inet::L3Address nodeIP);
     virtual void socketDataArrived(int connId, void *yourPtr, cPacket *msg, bool urgent) override;
     virtual void socketFailure(int connId, void *yourPtr, int code) override;
 };

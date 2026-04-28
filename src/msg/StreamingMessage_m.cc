@@ -192,6 +192,15 @@ StreamingMessage::StreamingMessage(const char *name, short kind) : ::omnetpp::cP
     this->networkDelay = 0;
     this->processingDelay = 0;
     this->edgeProcessingDelay = 0;
+    this->numHops = 0;
+    this->pendingHopStamp = false;
+    for (unsigned int i=0; i<8; i++)
+        this->hopLinkMs[i] = 0;
+    for (unsigned int i=0; i<8; i++)
+        this->hopProcMs[i] = 0;
+    for (unsigned int i=0; i<8; i++)
+        this->hopQueueDepth[i] = 0;
+    this->sourceLabel = "";
 }
 
 StreamingMessage::StreamingMessage(const StreamingMessage& other) : ::omnetpp::cPacket(other)
@@ -225,6 +234,17 @@ void StreamingMessage::copy(const StreamingMessage& other)
     this->networkDelay = other.networkDelay;
     this->processingDelay = other.processingDelay;
     this->edgeProcessingDelay = other.edgeProcessingDelay;
+    this->numHops = other.numHops;
+    this->pendingHopStamp = other.pendingHopStamp;
+    for (unsigned int i=0; i<8; i++)
+        this->hopLinkMs[i] = other.hopLinkMs[i];
+    for (unsigned int i=0; i<8; i++)
+        this->hopProcMs[i] = other.hopProcMs[i];
+    for (unsigned int i=0; i<8; i++)
+        this->hopQueueDepth[i] = other.hopQueueDepth[i];
+    for (unsigned int i=0; i<8; i++)
+        this->hopNodeLabel[i] = other.hopNodeLabel[i];
+    this->sourceLabel = other.sourceLabel;
 }
 
 void StreamingMessage::parsimPack(omnetpp::cCommBuffer *b) const
@@ -242,6 +262,13 @@ void StreamingMessage::parsimPack(omnetpp::cCommBuffer *b) const
     doParsimPacking(b,this->networkDelay);
     doParsimPacking(b,this->processingDelay);
     doParsimPacking(b,this->edgeProcessingDelay);
+    doParsimPacking(b,this->numHops);
+    doParsimPacking(b,this->pendingHopStamp);
+    doParsimArrayPacking(b,this->hopLinkMs,8);
+    doParsimArrayPacking(b,this->hopProcMs,8);
+    doParsimArrayPacking(b,this->hopQueueDepth,8);
+    doParsimArrayPacking(b,this->hopNodeLabel,8);
+    doParsimPacking(b,this->sourceLabel);
 }
 
 void StreamingMessage::parsimUnpack(omnetpp::cCommBuffer *b)
@@ -259,6 +286,13 @@ void StreamingMessage::parsimUnpack(omnetpp::cCommBuffer *b)
     doParsimUnpacking(b,this->networkDelay);
     doParsimUnpacking(b,this->processingDelay);
     doParsimUnpacking(b,this->edgeProcessingDelay);
+    doParsimUnpacking(b,this->numHops);
+    doParsimUnpacking(b,this->pendingHopStamp);
+    doParsimArrayUnpacking(b,this->hopLinkMs,8);
+    doParsimArrayUnpacking(b,this->hopProcMs,8);
+    doParsimArrayUnpacking(b,this->hopQueueDepth,8);
+    doParsimArrayUnpacking(b,this->hopNodeLabel,8);
+    doParsimUnpacking(b,this->sourceLabel);
 }
 
 int StreamingMessage::getMessageId() const
@@ -381,6 +415,104 @@ void StreamingMessage::setEdgeProcessingDelay(double edgeProcessingDelay)
     this->edgeProcessingDelay = edgeProcessingDelay;
 }
 
+int StreamingMessage::getNumHops() const
+{
+    return this->numHops;
+}
+
+void StreamingMessage::setNumHops(int numHops)
+{
+    this->numHops = numHops;
+}
+
+bool StreamingMessage::getPendingHopStamp() const
+{
+    return this->pendingHopStamp;
+}
+
+void StreamingMessage::setPendingHopStamp(bool pendingHopStamp)
+{
+    this->pendingHopStamp = pendingHopStamp;
+}
+
+unsigned int StreamingMessage::getHopLinkMsArraySize() const
+{
+    return 8;
+}
+
+double StreamingMessage::getHopLinkMs(unsigned int k) const
+{
+    if (k>=8) throw omnetpp::cRuntimeError("Array of size 8 indexed by %lu", (unsigned long)k);
+    return this->hopLinkMs[k];
+}
+
+void StreamingMessage::setHopLinkMs(unsigned int k, double hopLinkMs)
+{
+    if (k>=8) throw omnetpp::cRuntimeError("Array of size 8 indexed by %lu", (unsigned long)k);
+    this->hopLinkMs[k] = hopLinkMs;
+}
+
+unsigned int StreamingMessage::getHopProcMsArraySize() const
+{
+    return 8;
+}
+
+double StreamingMessage::getHopProcMs(unsigned int k) const
+{
+    if (k>=8) throw omnetpp::cRuntimeError("Array of size 8 indexed by %lu", (unsigned long)k);
+    return this->hopProcMs[k];
+}
+
+void StreamingMessage::setHopProcMs(unsigned int k, double hopProcMs)
+{
+    if (k>=8) throw omnetpp::cRuntimeError("Array of size 8 indexed by %lu", (unsigned long)k);
+    this->hopProcMs[k] = hopProcMs;
+}
+
+unsigned int StreamingMessage::getHopQueueDepthArraySize() const
+{
+    return 8;
+}
+
+int StreamingMessage::getHopQueueDepth(unsigned int k) const
+{
+    if (k>=8) throw omnetpp::cRuntimeError("Array of size 8 indexed by %lu", (unsigned long)k);
+    return this->hopQueueDepth[k];
+}
+
+void StreamingMessage::setHopQueueDepth(unsigned int k, int hopQueueDepth)
+{
+    if (k>=8) throw omnetpp::cRuntimeError("Array of size 8 indexed by %lu", (unsigned long)k);
+    this->hopQueueDepth[k] = hopQueueDepth;
+}
+
+unsigned int StreamingMessage::getHopNodeLabelArraySize() const
+{
+    return 8;
+}
+
+const char * StreamingMessage::getHopNodeLabel(unsigned int k) const
+{
+    if (k>=8) throw omnetpp::cRuntimeError("Array of size 8 indexed by %lu", (unsigned long)k);
+    return this->hopNodeLabel[k].c_str();
+}
+
+void StreamingMessage::setHopNodeLabel(unsigned int k, const char * hopNodeLabel)
+{
+    if (k>=8) throw omnetpp::cRuntimeError("Array of size 8 indexed by %lu", (unsigned long)k);
+    this->hopNodeLabel[k] = hopNodeLabel;
+}
+
+const char * StreamingMessage::getSourceLabel() const
+{
+    return this->sourceLabel.c_str();
+}
+
+void StreamingMessage::setSourceLabel(const char * sourceLabel)
+{
+    this->sourceLabel = sourceLabel;
+}
+
 class StreamingMessageDescriptor : public omnetpp::cClassDescriptor
 {
   private:
@@ -446,7 +578,7 @@ const char *StreamingMessageDescriptor::getProperty(const char *propertyname) co
 int StreamingMessageDescriptor::getFieldCount() const
 {
     omnetpp::cClassDescriptor *basedesc = getBaseClassDescriptor();
-    return basedesc ? 12+basedesc->getFieldCount() : 12;
+    return basedesc ? 19+basedesc->getFieldCount() : 19;
 }
 
 unsigned int StreamingMessageDescriptor::getFieldTypeFlags(int field) const
@@ -470,8 +602,15 @@ unsigned int StreamingMessageDescriptor::getFieldTypeFlags(int field) const
         FD_ISEDITABLE,
         FD_ISEDITABLE,
         FD_ISEDITABLE,
+        FD_ISEDITABLE,
+        FD_ISEDITABLE,
+        FD_ISARRAY | FD_ISEDITABLE,
+        FD_ISARRAY | FD_ISEDITABLE,
+        FD_ISARRAY | FD_ISEDITABLE,
+        FD_ISARRAY | FD_ISEDITABLE,
+        FD_ISEDITABLE,
     };
-    return (field>=0 && field<12) ? fieldTypeFlags[field] : 0;
+    return (field>=0 && field<19) ? fieldTypeFlags[field] : 0;
 }
 
 const char *StreamingMessageDescriptor::getFieldName(int field) const
@@ -495,8 +634,15 @@ const char *StreamingMessageDescriptor::getFieldName(int field) const
         "networkDelay",
         "processingDelay",
         "edgeProcessingDelay",
+        "numHops",
+        "pendingHopStamp",
+        "hopLinkMs",
+        "hopProcMs",
+        "hopQueueDepth",
+        "hopNodeLabel",
+        "sourceLabel",
     };
-    return (field>=0 && field<12) ? fieldNames[field] : nullptr;
+    return (field>=0 && field<19) ? fieldNames[field] : nullptr;
 }
 
 int StreamingMessageDescriptor::findField(const char *fieldName) const
@@ -515,6 +661,13 @@ int StreamingMessageDescriptor::findField(const char *fieldName) const
     if (fieldName[0]=='n' && strcmp(fieldName, "networkDelay")==0) return base+9;
     if (fieldName[0]=='p' && strcmp(fieldName, "processingDelay")==0) return base+10;
     if (fieldName[0]=='e' && strcmp(fieldName, "edgeProcessingDelay")==0) return base+11;
+    if (fieldName[0]=='n' && strcmp(fieldName, "numHops")==0) return base+12;
+    if (fieldName[0]=='p' && strcmp(fieldName, "pendingHopStamp")==0) return base+13;
+    if (fieldName[0]=='h' && strcmp(fieldName, "hopLinkMs")==0) return base+14;
+    if (fieldName[0]=='h' && strcmp(fieldName, "hopProcMs")==0) return base+15;
+    if (fieldName[0]=='h' && strcmp(fieldName, "hopQueueDepth")==0) return base+16;
+    if (fieldName[0]=='h' && strcmp(fieldName, "hopNodeLabel")==0) return base+17;
+    if (fieldName[0]=='s' && strcmp(fieldName, "sourceLabel")==0) return base+18;
     return basedesc ? basedesc->findField(fieldName) : -1;
 }
 
@@ -539,8 +692,15 @@ const char *StreamingMessageDescriptor::getFieldTypeString(int field) const
         "double",
         "double",
         "double",
+        "int",
+        "bool",
+        "double",
+        "double",
+        "int",
+        "string",
+        "string",
     };
-    return (field>=0 && field<12) ? fieldTypeStrings[field] : nullptr;
+    return (field>=0 && field<19) ? fieldTypeStrings[field] : nullptr;
 }
 
 const char **StreamingMessageDescriptor::getFieldPropertyNames(int field) const
@@ -579,6 +739,10 @@ int StreamingMessageDescriptor::getFieldArraySize(void *object, int field) const
     }
     StreamingMessage *pp = (StreamingMessage *)object; (void)pp;
     switch (field) {
+        case 14: return 8;
+        case 15: return 8;
+        case 16: return 8;
+        case 17: return 8;
         default: return 0;
     }
 }
@@ -619,6 +783,13 @@ std::string StreamingMessageDescriptor::getFieldValueAsString(void *object, int 
         case 9: return double2string(pp->getNetworkDelay());
         case 10: return double2string(pp->getProcessingDelay());
         case 11: return double2string(pp->getEdgeProcessingDelay());
+        case 12: return long2string(pp->getNumHops());
+        case 13: return bool2string(pp->getPendingHopStamp());
+        case 14: return double2string(pp->getHopLinkMs(i));
+        case 15: return double2string(pp->getHopProcMs(i));
+        case 16: return long2string(pp->getHopQueueDepth(i));
+        case 17: return oppstring2string(pp->getHopNodeLabel(i));
+        case 18: return oppstring2string(pp->getSourceLabel());
         default: return "";
     }
 }
@@ -645,6 +816,13 @@ bool StreamingMessageDescriptor::setFieldValueAsString(void *object, int field, 
         case 9: pp->setNetworkDelay(string2double(value)); return true;
         case 10: pp->setProcessingDelay(string2double(value)); return true;
         case 11: pp->setEdgeProcessingDelay(string2double(value)); return true;
+        case 12: pp->setNumHops(string2long(value)); return true;
+        case 13: pp->setPendingHopStamp(string2bool(value)); return true;
+        case 14: pp->setHopLinkMs(i,string2double(value)); return true;
+        case 15: pp->setHopProcMs(i,string2double(value)); return true;
+        case 16: pp->setHopQueueDepth(i,string2long(value)); return true;
+        case 17: pp->setHopNodeLabel(i,(value)); return true;
+        case 18: pp->setSourceLabel((value)); return true;
         default: return false;
     }
 }

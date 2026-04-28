@@ -71,6 +71,17 @@ void CPUCore::handleMessage(cMessage *msg) {
         emit(ISTask::cpuStateChangedSignal, States::CPU_BUSY);
         StreamingMessage *msgToProcess = check_and_cast<StreamingMessage *>(msg);
         msgToProcess->setOperatorIngressTime(simTime());
+
+        // Stamp queue depth for this hop (only for operator/sink hops, not source-local processing)
+        if (msgToProcess->getPendingHopStamp()) {
+            int hop = msgToProcess->getNumHops();
+            if (hop >= 0 && hop < 8) {
+                int totalQueued = 0;
+                for (auto& kv : processingQueueMap) totalQueued += kv.second.getLength();
+                msgToProcess->setHopQueueDepth(hop, totalQueued);
+            }
+        }
+
         bool isProcessingDelayInCpuCycles = msgToProcess->getIsProcessingDelayInCyclesPerEvent();
         double processingDelay = msgToProcess->getProcessingDelayPerEvent();
 //        double cyclesPerEvent = msgToProcess->getCyclesPerEvent();
@@ -89,6 +100,19 @@ void CPUCore::handleMessage(cMessage *msg) {
         double _procdelay = msgToProcess->getProcessingDelay() + _processingTime.dbl();
 //        std::cout << " CPU proc delay: " << msgToProcess->getSender() << _procdelay << endl;
         msgToProcess->setProcessingDelay(_procdelay);
+
+        // Stamp per-hop processing delay, node label, and advance hop counter
+        if (msgToProcess->getPendingHopStamp()) {
+            int hop = msgToProcess->getNumHops();
+            if (hop >= 0 && hop < 8) {
+                msgToProcess->setHopProcMs(hop, _processingTime.dbl() * 1000.0);
+                std::string label = std::string(msgToProcess->getSender()) + "@" + getParentModule()->getFullName();
+                msgToProcess->setHopNodeLabel(hop, label.c_str());
+                msgToProcess->setNumHops(hop + 1);
+                msgToProcess->setPendingHopStamp(false);
+            }
+        }
+
         if (isOnEdgeDevice) {
             msgToProcess->setEdgeProcessingDelay(msgToProcess->getEdgeProcessingDelay() + _processingTime.dbl());
         }

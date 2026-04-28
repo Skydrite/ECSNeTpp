@@ -33,11 +33,27 @@ protected:
     GlobalStreamingSupervisor *globalSupervisor;
     bool ackersEnabled;
     bool hasGlobalSupervisor;
+
+    // TODO: remove — temporary hardcoded split trigger; replace with optimizer signal
+    cMessage* splitTriggerMsg = nullptr;
+    // category -> node full-paths hosting inactive replicas (populated during executeAllocationPlan)
+    std::map<std::string, std::vector<std::string>> inactiveReplicaNodePaths;
+    // destCategory -> [(supervisor, senderCategory)] pairs.
+    // The senderCategory is the task hosted on that supervisor's node that routes to destCategory.
+    // Both pieces are needed to update the correct routing entry on activation.
+    std::map<std::string, std::vector<std::pair<StreamingSupervisor*, std::string>>> categoryUpstreamSupervisors;
+    // Activates the first dormant replica for the given operator category.
+    void activateFirstReplica(const std::string& category);
+
 protected:
     virtual void initialize() override;
     virtual void handleMessage(cMessage *msg) override;
     void connect(cGate *src, cGate *dest, double delay, double ber, double datarate);
     void executeAllocationPlan(cModule *parent);
+    // Reads originalFile, generates a companion *_with_replicas.xml that pre-deploys
+    // dormant operator replicas across all node tiers, and returns its path.
+    // Returns originalFile unchanged if replicasPerOperator <= 1.
+    std::string generateReplicaPlacement(const char* originalFile);
     void setupDistribution(XMLElement* task, const char* taskDistributionXmlElementName, const char* isDistributionEnabledBoolVarName,
             const char* distributionModuleName, cModule* stask, cModule* _parent, const char* nonDistributedValueXmlElementName,
             const char* nonDistributedValueVarName);

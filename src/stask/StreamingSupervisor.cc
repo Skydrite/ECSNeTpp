@@ -126,19 +126,23 @@ void StreamingSupervisor::processTCPMessage(cMessage* msg) {
             std::string sender = msgToSend->getSender();
             std::vector<inet::L3Address> _downstreamNodes = senderStaskCategoryToDownstreamNodeIPMap[sender];
 //            std::cout << ">>>>>>>>>>>>>TEST" << msg->getKind() << " Sender=" << sender << " recpts="<< _downstreamNodes.size() << endl;
-            for (size_t i = 0; i < _downstreamNodes.size(); i++) {
-                inet::TCPSocket* sock = destinationSocketMap[_downstreamNodes[i]];
+            // Round-robin: pick one destination per message.
+            // When only one node exists the behaviour is identical to before.
+            if (!_downstreamNodes.empty()) {
+                int& counter = roundRobinCounters[sender];
+                inet::L3Address dest = _downstreamNodes[counter % _downstreamNodes.size()];
+                counter++;
+
+                inet::TCPSocket* sock = destinationSocketMap[dest];
                 if (!sock) {
-//                std::cout << "RR=" << _downstreamNodes[i] << endl;
                     sock = new inet::TCPSocket();
                     sock->setOutputGate(gate("tcpOut"));
                     sock->readDataTransferModePar(*this);
                     sock->setCallbackObject(this, nullptr);
                     tcpSocketMap.addSocket(sock);
-                    destinationSocketMap[_downstreamNodes[i]] = sock;
-                    sock->connect(_downstreamNodes[i], 1000);
+                    destinationSocketMap[dest] = sock;
+                    sock->connect(dest, 1000);
                 }
-//                std::cout << "Sending: " << msgToSend->getByteLength() << endl;
                 sock->send(msgToSend->dup());
             }
             delete msgToSend;
@@ -176,6 +180,13 @@ void StreamingSupervisor::handleMessage(cMessage *msg) {
             StreamingMessage* msgToSend = check_and_cast<StreamingMessage*>(msg);
             const omnetpp::SimTime _networkDelay = simTime() - msgToSend->getChannelIngressTime();
             msgToSend->setNetworkDelay(_networkDelay.dbl());
+
+            // Stamp per-hop link delay
+            int hop = msgToSend->getNumHops();
+            if (hop >= 0 && hop < 8) {
+                msgToSend->setHopLinkMs(hop, _networkDelay.dbl() * 1000.0);
+                msgToSend->setPendingHopStamp(true);
+            }
 
             std::string sender = msgToSend->getSender();
             auto it = senderToLocalGateMap.find(sender);
@@ -250,6 +261,14 @@ void StreamingSupervisor::resolveDownstreamNodeIPs() {
 
 void StreamingSupervisor::addSenderToLocalGateMapping(std::string senderCategory, int gateIndex) {
     senderToLocalGateMap[senderCategory].push_back(gateIndex);
+}
+
+void StreamingSupervisor::activateReplica(const std::string& senderCategory, inet::L3Address nodeIP) {
+    senderStaskCategoryToDownstreamNodeIPMap[senderCategory].push_back(nodeIP);
+    roundRobinCounters[senderCategory] = 0; // reset so load distributes evenly from here
+    std::cout << "[Supervisor] " << getParentModule()->getFullPath()
+              << ": activated replica for '" << senderCategory
+              << "' -> " << nodeIP << " at t=" << simTime() << endl;
 }
 
 }

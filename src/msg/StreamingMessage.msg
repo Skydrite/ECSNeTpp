@@ -44,4 +44,15 @@ packet StreamingMessage {
 	double networkDelay;
 	double processingDelay;
 	double edgeProcessingDelay;
+
+	// Per-hop telemetry (max 8 hops)
+	int numHops = 0;
+	bool pendingHopStamp = false;  // set true by supervisor after link stamp; cleared by CPUCore after proc stamp
+	double hopLinkMs[8];           // WAN link delay to reach each hop (ms)
+	double hopProcMs[8];           // CPU processing delay at each hop destination (ms)
+	int hopQueueDepth[8];          // CPUCore queue depth when message was processed at each hop
+	string hopNodeLabel[8];        // "category@nodeName" stamped by CPUCore at each hop
+
+	// Source identity — set once at creation, never overwritten
+	string sourceLabel = "";       // "category@nodeName" of the generating source task
 }

@@ -45,6 +45,17 @@ namespace ecsnetpp {
  *     double networkDelay;
  *     double processingDelay;
  *     double edgeProcessingDelay;
+ * 
+ *     // Per-hop telemetry (max 8 hops)
+ *     int numHops = 0;
+ *     bool pendingHopStamp = false;  // set true by supervisor after link stamp; cleared by CPUCore after proc stamp
+ *     double hopLinkMs[8];           // WAN link delay to reach each hop (ms)
+ *     double hopProcMs[8];           // CPU processing delay at each hop destination (ms)
+ *     int hopQueueDepth[8];          // CPUCore queue depth when message was processed at each hop
+ *     string hopNodeLabel[8];        // "category\@nodeName" stamped by CPUCore at each hop
+ * 
+ *     // Source identity — set once at creation, never overwritten
+ *     string sourceLabel = "";       // "category\@nodeName" of the generating source task
  * }
  * </pre>
  */
@@ -63,6 +74,13 @@ class StreamingMessage : public ::omnetpp::cPacket
     double networkDelay;
     double processingDelay;
     double edgeProcessingDelay;
+    int numHops;
+    bool pendingHopStamp;
+    double hopLinkMs[8];
+    double hopProcMs[8];
+    int hopQueueDepth[8];
+    ::omnetpp::opp_string hopNodeLabel[8];
+    ::omnetpp::opp_string sourceLabel;
 
   private:
     void copy(const StreamingMessage& other);
@@ -105,6 +123,24 @@ class StreamingMessage : public ::omnetpp::cPacket
     virtual void setProcessingDelay(double processingDelay);
     virtual double getEdgeProcessingDelay() const;
     virtual void setEdgeProcessingDelay(double edgeProcessingDelay);
+    virtual int getNumHops() const;
+    virtual void setNumHops(int numHops);
+    virtual bool getPendingHopStamp() const;
+    virtual void setPendingHopStamp(bool pendingHopStamp);
+    virtual unsigned int getHopLinkMsArraySize() const;
+    virtual double getHopLinkMs(unsigned int k) const;
+    virtual void setHopLinkMs(unsigned int k, double hopLinkMs);
+    virtual unsigned int getHopProcMsArraySize() const;
+    virtual double getHopProcMs(unsigned int k) const;
+    virtual void setHopProcMs(unsigned int k, double hopProcMs);
+    virtual unsigned int getHopQueueDepthArraySize() const;
+    virtual int getHopQueueDepth(unsigned int k) const;
+    virtual void setHopQueueDepth(unsigned int k, int hopQueueDepth);
+    virtual unsigned int getHopNodeLabelArraySize() const;
+    virtual const char * getHopNodeLabel(unsigned int k) const;
+    virtual void setHopNodeLabel(unsigned int k, const char * hopNodeLabel);
+    virtual const char * getSourceLabel() const;
+    virtual void setSourceLabel(const char * sourceLabel);
 };
 
 inline void doParsimPacking(omnetpp::cCommBuffer *b, const StreamingMessage& obj) {obj.parsimPack(b);}

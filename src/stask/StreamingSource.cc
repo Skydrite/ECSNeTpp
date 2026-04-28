@@ -101,6 +101,9 @@ void StreamingSource::handleMessage(cMessage *msg) {
             sourceMsg->setNetworkDelay(0);
             sourceMsg->setProcessingDelay(0);
             sourceMsg->setEdgeProcessingDelay(0);
+            sourceMsg->setNumHops(0);
+            sourceMsg->setPendingHopStamp(false);
+            sourceMsg->setSourceLabel((std::string(mySTaskCategory) + "@" + getParentModule()->getFullName()).c_str());
             long nextInLine = getNextProcessorCoreIndex();
             cModule *cpuCore = getParentModule()->getSubmodule("cpuCore",
                     nextInLine);

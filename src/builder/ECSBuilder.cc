@@ -15,9 +15,12 @@
 
 #include <iostream>
 #include <fstream>
+#include <algorithm>
+#include <set>
 #include <vector>
 #include <string.h>
 #include "ECSBuilder.h"
+#include "inet/networklayer/common/L3AddressResolver.h"
 
 using namespace tinyxml2;
 using namespace omnetpp;
@@ -26,11 +29,256 @@ namespace ecsnetpp {
 
 Define_Module(ECSBuilder);
 
+
 struct cmp_str {
     bool operator()(char const *a, char const *b) {
         return std::strcmp(a, b) < 0;
     }
 };
+
+// ---------------------------------------------------------------------------
+// XML deep-clone helpers (tinyxml2 has no built-in recursive clone)
+// ---------------------------------------------------------------------------
+static void deepCopyChildren(XMLDocument& doc, XMLElement* dst, const XMLElement* src) {
+    for (const XMLNode* child = src->FirstChild(); child; child = child->NextSibling()) {
+        if (const XMLElement* e = child->ToElement()) {
+            XMLElement* newElem = doc.NewElement(e->Name());
+            for (const XMLAttribute* a = e->FirstAttribute(); a; a = a->Next())
+                newElem->SetAttribute(a->Name(), a->Value());
+            deepCopyChildren(doc, newElem, e);
+            dst->InsertEndChild(newElem);
+        } else if (const XMLText* t = child->ToText()) {
+            dst->InsertEndChild(doc.NewText(t->Value()));
+        }
+    }
+}
+
+static XMLElement* deepClone(XMLDocument& doc, const XMLElement* src) {
+    XMLElement* dst = doc.NewElement(src->Name());
+    for (const XMLAttribute* a = src->FirstAttribute(); a; a = a->Next())
+        dst->SetAttribute(a->Name(), a->Value());
+    deepCopyChildren(doc, dst, src);
+    return dst;
+}
+
+// ---------------------------------------------------------------------------
+// Replica placement generator
+// ---------------------------------------------------------------------------
+std::string ECSBuilder::generateReplicaPlacement(const char* originalFile) {
+    int replicasPerOp = (int)par("replicasPerOperator").longValue();
+    if (replicasPerOp <= 1) {
+        // No replicas requested — use original file unchanged.
+        return std::string(originalFile);
+    }
+
+    int numPi3Bs   = (int)getAncestorPar("numPiModel3Bs").longValue();
+    int numTransit = (int)getAncestorPar("numTransitNodes").longValue();
+    int numCloud   = (int)getAncestorPar("numCloudNodes").longValue();
+
+    // All physical node slots, ordered transit → cloud → edge.
+    // Transit and cloud nodes are preferred for replicas (higher bandwidth);
+    // edge nodes are last resort (WiFi-only, constrained throughput).
+    struct Slot { std::string name; int idx; };
+    std::vector<Slot> allSlots;
+    for (int i = 0; i < numTransit;  i++) allSlots.push_back({"transitNodes", i});
+    for (int i = 0; i < numCloud;    i++) allSlots.push_back({"cloudNodes",   i});
+    for (int i = 0; i < numPi3Bs;   i++) allSlots.push_back({"pi3Bs",        i});
+
+    const char* OP_TYPE = "ecsnetpp.stask.StreamingOperator";
+
+    // --- Parse original ---
+    XMLDocument origDoc;
+    if (origDoc.LoadFile(originalFile) != XML_SUCCESS)
+        throw cRuntimeError("Cannot read placement file: %s", originalFile);
+
+    // --- Build operator→downstream-categories map from topology file ---
+    // Key: sender category  Value: set of categories it forwards to
+    std::map<std::string, std::set<std::string>> downstreamOf;
+    {
+        std::fstream topoFile(par("dspTopologyFile").stringValue(), std::ios::in);
+        std::string line;
+        while (std::getline(topoFile, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::vector<std::string> tok = cStringTokenizer(line.c_str()).asVector();
+            if (tok.size() >= 2)
+                downstreamOf[tok[0]].insert(tok[1]);
+        }
+    }
+
+    // --- Build (nodeName_idx) → set of hosted categories from original placement ---
+    std::map<std::string, std::set<std::string>> nodeCategories;
+    {
+        const XMLElement* d = origDoc.FirstChildElement("devices")->FirstChildElement("device");
+        while (d) {
+            const char* dn  = d->FirstChildElement("name")->GetText();
+            const char* di  = d->FirstChildElement("index-range")->GetText();
+            std::vector<int> idxs = cStringTokenizer(di, "..").asIntVector();
+            int idxFrom = idxs[0], idxTo = (idxs.size() > 1) ? idxs[1] : idxs[0];
+            const XMLElement* tl = d->FirstChildElement("tasks");
+            const XMLElement* t  = tl ? tl->FirstChildElement("task") : nullptr;
+            while (t) {
+                const XMLElement* catEl = t->FirstChildElement("category");
+                if (catEl) {
+                    for (int i = idxFrom; i <= idxTo; i++) {
+                        std::string key = std::string(dn) + "_" + std::to_string(i);
+                        nodeCategories[key].insert(catEl->GetText());
+                    }
+                }
+                t = t->NextSiblingElement("task");
+            }
+            d = d->NextSiblingElement("device");
+        }
+    }
+
+    // --- Build output document (deep copy of original + replica devices) ---
+    XMLDocument outDoc;
+    outDoc.InsertFirstChild(outDoc.NewDeclaration());
+    XMLElement* outRoot = outDoc.NewElement("devices");
+    outDoc.InsertEndChild(outRoot);
+
+    // Per-category info collected during the first pass over the original.
+    // category -> slots that already host an active instance
+    std::map<std::string, std::vector<Slot>> opActiveSlots;
+    // category -> pointer to one task XML element to use as template
+    std::map<std::string, const XMLElement*> opTaskTemplate;
+
+    XMLElement* device = origDoc.FirstChildElement("devices")->FirstChildElement("device");
+    while (device) {
+        // --- Deep-copy this device into the output doc ---
+        XMLElement* outDevice = deepClone(outDoc, device);
+
+        // --- Collect operator info and mark actives ---
+        const char* devName  = device->FirstChildElement("name")->GetText();
+        const char* idxText  = device->FirstChildElement("index-range")->GetText();
+        std::vector<int> indices = cStringTokenizer(idxText, "..").asIntVector();
+        int idxFrom = indices[0];
+        int idxTo   = (indices.size() > 1) ? indices[1] : indices[0];
+
+        // Walk original tasks and parallel output tasks together so we can
+        // inject <active>true</active> into the cloned operator entries.
+        XMLElement* srcTasks = device->FirstChildElement("tasks");
+        XMLElement* dstTasks = outDevice->FirstChildElement("tasks");
+        const XMLElement* srcTask = srcTasks ? srcTasks->FirstChildElement("task") : nullptr;
+        XMLElement*       dstTask = dstTasks ? dstTasks->FirstChildElement("task") : nullptr;
+
+        while (srcTask) {
+            const char* type = "";
+            const char* cat  = "";
+            const XMLElement* typeEl = srcTask->FirstChildElement("type");
+            const XMLElement* catEl  = srcTask->FirstChildElement("category");
+            if (typeEl) type = typeEl->GetText();
+            if (catEl)  cat  = catEl->GetText();
+
+            if (strcmp(type, OP_TYPE) == 0) {
+                // Record template and active slots for this category.
+                opTaskTemplate[cat] = srcTask;
+                for (int i = idxFrom; i <= idxTo; i++)
+                    opActiveSlots[cat].push_back({devName, i});
+
+                // Inject <active>true</active> into the cloned task.
+                if (dstTask) {
+                    XMLElement* activeEl = outDoc.NewElement("active");
+                    activeEl->SetText("true");
+                    dstTask->InsertEndChild(activeEl);
+                }
+            }
+            srcTask = srcTask->NextSiblingElement("task");
+            if (dstTask) dstTask = dstTask->NextSiblingElement("task");
+        }
+
+        outRoot->InsertEndChild(outDevice);
+        device = device->NextSiblingElement("device");
+    }
+
+    // --- Second pass: add dormant replica <device> blocks ---
+    for (auto& kv : opTaskTemplate) {
+        const std::string& cat       = kv.first;
+        const XMLElement*  tmplTask  = kv.second;
+        const char*        origName  = tmplTask->FirstChildElement("name")->GetText();
+
+        std::vector<Slot>& activeSlots = opActiveSlots[cat];
+        int maxNewReplicas = replicasPerOp - (int)activeSlots.size();
+        if (maxNewReplicas <= 0) continue;
+
+        int replicasAdded = 0;
+        int replicaNum    = 2; // naming: origName_r2, origName_r3, ...
+
+        for (auto& slot : allSlots) {
+            if (replicasAdded >= maxNewReplicas) break;
+
+            // Skip slots already hosting an active instance of this category.
+            bool alreadyUsed = false;
+            for (auto& as : activeSlots) {
+                if (as.name == slot.name && as.idx == slot.idx) {
+                    alreadyUsed = true;
+                    break;
+                }
+            }
+            if (alreadyUsed) continue;
+
+            // Skip slots that host any downstream task of this operator category.
+            // Placing a replica co-located with its downstream task inserts it as
+            // an unintended relay in the original routing path.
+            bool hasDownstream = false;
+            std::string slotKey = slot.name + "_" + std::to_string(slot.idx);
+            auto dsIt = downstreamOf.find(cat);
+            if (dsIt != downstreamOf.end()) {
+                auto ncIt = nodeCategories.find(slotKey);
+                if (ncIt != nodeCategories.end()) {
+                    for (const auto& dc : dsIt->second) {
+                        if (ncIt->second.count(dc)) { hasDownstream = true; break; }
+                    }
+                }
+            }
+            if (hasDownstream) continue;
+
+            // Build a new <device> block for this replica.
+            XMLElement* repDevice = outDoc.NewElement("device");
+
+            XMLElement* nameEl = outDoc.NewElement("name");
+            nameEl->SetText(slot.name.c_str());
+            repDevice->InsertEndChild(nameEl);
+
+            XMLElement* idxEl = outDoc.NewElement("index-range");
+            idxEl->SetText(std::to_string(slot.idx).c_str());
+            repDevice->InsertEndChild(idxEl);
+
+            XMLElement* tasksEl = outDoc.NewElement("tasks");
+
+            // Clone the template task and update name + active flag.
+            XMLElement* repTask = deepClone(outDoc, tmplTask);
+
+            XMLElement* repNameEl = repTask->FirstChildElement("name");
+            if (repNameEl) {
+                std::string newName = std::string(origName) + "_r" + std::to_string(replicaNum++);
+                repNameEl->SetText(newName.c_str());
+            }
+
+            XMLElement* activeEl = outDoc.NewElement("active");
+            activeEl->SetText("false");
+            repTask->InsertEndChild(activeEl);
+
+            tasksEl->InsertEndChild(repTask);
+            repDevice->InsertEndChild(tasksEl);
+            outRoot->InsertEndChild(repDevice);
+
+            replicasAdded++;
+        }
+    }
+
+    // --- Write output file next to the original ---
+    std::string origPath = originalFile;
+    size_t dot = origPath.rfind('.');
+    std::string outPath = (dot != std::string::npos)
+        ? origPath.substr(0, dot) + "_with_replicas.xml"
+        : origPath + "_with_replicas.xml";
+
+    if (outDoc.SaveFile(outPath.c_str()) != XML_SUCCESS)
+        throw cRuntimeError("Cannot write replica placement file: %s", outPath.c_str());
+
+    std::cout << "[ECSBuilder] Replica placement written to: " << outPath << endl;
+    return outPath;
+}
 
 void ECSBuilder::initialize() {
     hasGlobalSupervisor = getAncestorPar("hasGlobalSupervisor").boolValue();
@@ -47,6 +295,14 @@ void ECSBuilder::initialize() {
 void ECSBuilder::handleMessage(cMessage *msg) {
     if (!msg->isSelfMessage())
         throw cRuntimeError("This module does not process messages.");
+
+    // TODO: replace with optimizer signal — uncomment to re-enable hardcoded split
+    // if (msg == splitTriggerMsg) {
+    //     activateFirstReplica("inflateOp");
+    //     delete msg;
+    //     splitTriggerMsg = nullptr;
+    //     return;
+    // }
 
     delete msg;
     executeAllocationPlan(getParentModule());
@@ -67,7 +323,9 @@ void ECSBuilder::connect(cGate *src, cGate *dest, double delay, double ber, doub
 }
 
 void ECSBuilder::executeAllocationPlan(cModule *parent) {
-    const char* allocationFileName = par("allocationPlanFile").stringValue();
+    const char* origAllocationFile = par("allocationPlanFile").stringValue();
+    std::string replicaFilePath    = generateReplicaPlacement(origAllocationFile);
+    const char* allocationFileName = replicaFilePath.c_str();
     const char* STREAMING_SOURCE_NAME = "ecsnetpp.stask.StreamingSource";
     const char* STREAMING_OPERATOR_NAME = "ecsnetpp.stask.StreamingOperator";
     std::string line;
@@ -213,9 +471,20 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
                 incomingConnectionsUsageMap[_parentName][newStaskName] = 0;
                 outgoingConnectionsUsageMap[_parentName][newStaskName] = 0;
                 staskNameToCategoryMap[newStaskName] = staskCategory;
-//                std::cout << "sname->scat map" << newStaskName << ":" << staskCategory << endl;
-                staskCategoryToParentMap[staskCategory].push_back(_parentName);
-//                std::cout << "scat->parent map" << staskCategory << ":" << _parentName << endl;
+
+                // Inactive replicas are deployed on the node but excluded from
+                // upstream routing so no traffic is sent to them at startup.
+                bool taskIsActive = true;
+                XMLElement* activeXml = task->FirstChildElement("active");
+                if (activeXml && activeXml->GetText()) {
+                    std::string av = activeXml->GetText();
+                    taskIsActive = (av != "false" && av != "0");
+                }
+                if (taskIsActive) {
+                    staskCategoryToParentMap[staskCategory].push_back(_parentName);
+                } else {
+                    inactiveReplicaNodePaths[staskCategory].push_back(_parentName);
+                }
             }
 
             task = task->NextSiblingElement("task");
@@ -237,7 +506,7 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
         // get fields from tokens
         std::string srcSTaskCategory = tokens[0];
         std::string destSTaskCategory = tokens[1];
-        bool connected = strncmp(tokens[2].c_str(), "1", 1) == 0 ? true : false;
+        bool connected = true; // third column ignored — any value treated as connected
         connectedSTasks[srcSTaskCategory][destSTaskCategory] = connected;
         if (connected) {
             // count maps were initialized earlier
@@ -273,6 +542,7 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
             mySenders->setName("mySenders");
             mySenders->setStringValue(ss.str().c_str());
             _src->addPar(mySenders);
+
             // read params from the ini file, etc
             _src->finalizeParameters();
 
@@ -367,6 +637,13 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
                         _hostedTaskCategory,
                         staskCategoryToParentMap[destCategory]
                 );
+                // Record this supervisor + its sender category: when a new replica of
+                // destCategory is activated, we update senderStaskCategoryToDownstreamNodeIPMap
+                // keyed by _hostedTaskCategory (the actual forwarding key), not destCategory.
+                auto& svList = categoryUpstreamSupervisors[destCategory];
+                auto entry = std::make_pair(_supervisor, _hostedTaskCategory);
+                if (std::find(svList.begin(), svList.end(), entry) == svList.end())
+                    svList.push_back(entry);
             }
         }
         _supervisor->resolveDownstreamNodeIPs();
@@ -414,6 +691,13 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
             }
         }
     }
+
+    // TODO: replace with optimizer signal — uncomment to re-enable hardcoded split
+    // if (!inactiveReplicaNodePaths.empty()) {
+    //     splitTriggerMsg = new cMessage("splitTrigger");
+    //     scheduleAt(SimTime(25), splitTriggerMsg);
+    //     std::cout << "[ECSBuilder] Hardcoded split trigger scheduled at t=25s (TODO: remove)" << endl;
+    // }
 }
 
 void ECSBuilder::setupDistribution(XMLElement* task, const char* taskDistributionXmlElementName, const char* isDistributionEnabledBoolVarName,
@@ -473,6 +757,30 @@ void ECSBuilder::setupDistribution(XMLElement* task, const char* taskDistributio
         stask->addPar(nonDistributedValuePar);
     }
     stask->addPar(isDistributionEnabledBoolPar);
+}
+
+void ECSBuilder::activateFirstReplica(const std::string& category) {
+    auto it = inactiveReplicaNodePaths.find(category);
+    if (it == inactiveReplicaNodePaths.end() || it->second.empty()) {
+        std::cout << "[ECSBuilder] No inactive replicas found for category: " << category << endl;
+        return;
+    }
+
+    std::string replicaNodePath = it->second[0];
+    inet::L3Address replicaIP = inet::L3AddressResolver().resolve(replicaNodePath.c_str());
+
+    auto& supervisors = categoryUpstreamSupervisors[category];
+    for (auto& [sv, senderCat] : supervisors) {
+        sv->activateReplica(senderCat, replicaIP);
+    }
+
+    // Remove from inactive list so a second trigger would pick the next replica
+    it->second.erase(it->second.begin());
+
+    std::cout << "[ECSBuilder] Activated replica of '" << category
+              << "' on " << replicaNodePath
+              << " (" << replicaIP << ") at t=" << simTime()
+              << " — updated " << supervisors.size() << " supervisor(s)." << endl;
 }
 
 } /* namespace ecsnetpp */
