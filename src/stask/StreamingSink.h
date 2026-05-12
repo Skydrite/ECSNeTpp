@@ -19,6 +19,7 @@
 #include "omnetpp.h"
 #include "../msg/StreamingMessage_m.h"
 #include "ISTask.h"
+#include <functional>
 
 using namespace omnetpp;
 
@@ -57,6 +58,19 @@ private:
     };
     std::map<std::string, PathWindowStats> pathStats;
 
+    // Latest observed average link delay per device (e.g. "transitNodes[0]" -> ms).
+    // Updated at the end of each window from actual hop measurements.
+    // Persists across windows so ECSBuilder can read it at any time.
+    std::map<std::string, double> latestLinkDelayPerDevice;
+
+public:
+    // Set by ECSBuilder during executeAllocationPlan() to redirect report JSON to the
+    // TCP report stream instead of (or in addition to) stdout. If null, stdout is used.
+    std::function<void(const std::string&)> reportEmitter;
+
+    const std::map<std::string, double>& getLatestLinkDelayPerDevice() const {
+        return latestLinkDelayPerDevice;
+    }
 };
 
 } /* namespace ecsnetpp */

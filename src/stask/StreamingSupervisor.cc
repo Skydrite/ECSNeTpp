@@ -5,6 +5,7 @@
  *      Author: gayashan
  */
 
+#include <algorithm>
 #include "inet/transportlayer/contract/udp/UDPSocket.h"
 #include "inet/transportlayer/contract/tcp/TCPSocket.h"
 #include "inet/networklayer/common/L3AddressResolver.h"
@@ -269,6 +270,18 @@ void StreamingSupervisor::activateReplica(const std::string& senderCategory, ine
     std::cout << "[Supervisor] " << getParentModule()->getFullPath()
               << ": activated replica for '" << senderCategory
               << "' -> " << nodeIP << " at t=" << simTime() << endl;
+}
+
+void StreamingSupervisor::deactivateNode(const std::string& senderCategory, inet::L3Address nodeIP) {
+    auto it = senderStaskCategoryToDownstreamNodeIPMap.find(senderCategory);
+    if (it == senderStaskCategoryToDownstreamNodeIPMap.end()) return;
+    auto& vec = it->second;
+    vec.erase(std::remove(vec.begin(), vec.end(), nodeIP), vec.end());
+    roundRobinCounters[senderCategory] = 0;
+    std::cout << "[Supervisor] " << getParentModule()->getFullPath()
+              << ": deactivated '" << nodeIP
+              << "' for senderCategory '" << senderCategory
+              << "' at t=" << simTime() << endl;
 }
 
 }

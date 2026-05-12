@@ -15,10 +15,15 @@
 
 #include <iostream>
 #include <fstream>
+#include <sstream>
+#include <iomanip>
 #include <algorithm>
 #include <set>
 #include <vector>
 #include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
 #include "ECSBuilder.h"
 #include "inet/networklayer/common/L3AddressResolver.h"
 
@@ -286,6 +291,21 @@ void ECSBuilder::initialize() {
         globalSupervisor = check_and_cast<GlobalStreamingSupervisor *>(getParentModule()->getModuleByPath(".globalSupervisorNode.globalSupervisor"));
     }
     ackersEnabled = getAncestorPar("ackersEnabled").boolValue();
+
+    // Start TCP report stream server (Simulator → Optimizer push channel).
+    int reportPort = (int)par("tcpReportPort").longValue();
+    if (reportPort > 0) {
+        reportRunning = true;
+        reportThread = std::thread(&ECSBuilder::reportServerLoop, this, reportPort);
+    }
+
+    // Start TCP optimizer command server (Optimizer → Simulator commands).
+    int tcpPort = (int)par("tcpOptimizerPort").longValue();
+    if (tcpPort > 0) {
+        tcpRunning = true;
+        tcpThread = std::thread(&ECSBuilder::tcpServerLoop, this, tcpPort);
+    }
+
     // build the network in event 1, because it is undefined whether the simkernel
     // will implicitly initialize modules created *during* initialization, or this needs
     // to be done manually.
@@ -295,6 +315,43 @@ void ECSBuilder::initialize() {
 void ECSBuilder::handleMessage(cMessage *msg) {
     if (!msg->isSelfMessage())
         throw cRuntimeError("This module does not process messages.");
+
+    // Periodic GLOBAL_SNAPSHOT emission.
+    if (msg == snapshotMsg) {
+        emitGlobalSnapshot();
+        scheduleAt(simTime() + SNAPSHOT_INTERVAL_S, snapshotMsg);
+        return;
+    }
+
+    // Poll for optimizer commands received over TCP.
+    if (msg == pollMsg) {
+        std::string line;
+        int clientFd = -1;
+        {
+            std::unique_lock<std::mutex> lock(cmdMutex);
+            if (cmdPending) {
+                line     = cmdLine;
+                clientFd = cmdClientFd;
+            }
+        }
+
+        if (clientFd >= 0) {
+            std::string ack = dispatchCommand(line);
+            std::string ackLine = ack + "\n";
+            ::send(clientFd, ackLine.c_str(), ackLine.size(), 0);
+            close(clientFd);
+
+            {
+                std::unique_lock<std::mutex> lock(cmdMutex);
+                cmdPending  = false;
+                cmdClientFd = -1;
+            }
+            cmdCv.notify_one();
+        }
+
+        scheduleAt(simTime() + 1.0, pollMsg);
+        return;
+    }
 
     // TODO: replace with optimizer signal — uncomment to re-enable hardcoded split
     // if (msg == splitTriggerMsg) {
@@ -306,6 +363,12 @@ void ECSBuilder::handleMessage(cMessage *msg) {
 
     delete msg;
     executeAllocationPlan(getParentModule());
+
+    // Start polling for TCP commands now that the network is built.
+    if ((int)par("tcpOptimizerPort").longValue() > 0) {
+        pollMsg = new cMessage("tcpPoll");
+        scheduleAt(simTime() + 1.0, pollMsg);
+    }
 }
 
 void ECSBuilder::connect(cGate *src, cGate *dest, double delay, double ber, double datarate) {
@@ -482,6 +545,7 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
                 }
                 if (taskIsActive) {
                     staskCategoryToParentMap[staskCategory].push_back(_parentName);
+                    categoryActiveNodePath[staskCategory] = _parentName;
                 } else {
                     inactiveReplicaNodePaths[staskCategory].push_back(_parentName);
                 }
@@ -698,6 +762,49 @@ void ECSBuilder::executeAllocationPlan(cModule *parent) {
     //     scheduleAt(SimTime(25), splitTriggerMsg);
     //     std::cout << "[ECSBuilder] Hardcoded split trigger scheduled at t=25s (TODO: remove)" << endl;
     // }
+
+    // Collect sink module pointers and wire up the report emitter callback.
+    for (it = allocationMap.begin(); it != allocationMap.end(); ++it) {
+        for (cModule* mod : it->second) {
+            if (StreamingSink* sink = dynamic_cast<StreamingSink*>(mod)) {
+                sinkModules.push_back(sink);
+                sink->reportEmitter = [this](const std::string& json) { emitToClient(json); };
+            }
+        }
+    }
+
+    // Build node inventory for GLOBAL_SNAPSHOT.
+    // Include transitNodes and cloudNodes (skip pi3Bs — edge devices have no WAN cost or link delay).
+    int numTransit = (int)getAncestorPar("numTransitNodes").longValue();
+    int numCloud   = (int)getAncestorPar("numCloudNodes").longValue();
+    double transitCost = getAncestorPar("transitLinkCostPerGB").doubleValue();
+    double cloudCost   = getAncestorPar("cloudLinkCostPerGB").doubleValue();
+
+    for (int i = 0; i < numTransit; i++) {
+        cModule* node = getParentModule()->getSubmodule("transitNodes", i);
+        if (!node) continue;
+        NodeInfo ni;
+        ni.deviceLabel  = std::string("transitNodes[") + std::to_string(i) + "]";
+        ni.module       = node;
+        ni.coresTotal   = (int)node->par("cores").longValue();
+        ni.linkDelayMs  = node->par("linkDelay").doubleValue() * 1000.0;  // linkDelay is @unit(s) → convert to ms
+        ni.linkCostPerGB = transitCost;
+        snapshotNodes.push_back(ni);
+    }
+    for (int i = 0; i < numCloud; i++) {
+        cModule* node = getParentModule()->getSubmodule("cloudNodes", i);
+        if (!node) continue;
+        NodeInfo ni;
+        ni.deviceLabel  = std::string("cloudNodes[") + std::to_string(i) + "]";
+        ni.module       = node;
+        ni.coresTotal   = (int)node->par("cores").longValue();
+        ni.linkDelayMs  = getAncestorPar("eToCDelayMean").doubleValue();  // eToCDelayMean is @unit(ms) → already in ms
+        ni.linkCostPerGB = cloudCost;
+        snapshotNodes.push_back(ni);
+    }
+
+    snapshotMsg = new cMessage("globalSnapshot");
+    scheduleAt(simTime() + SNAPSHOT_INTERVAL_S, snapshotMsg);
 }
 
 void ECSBuilder::setupDistribution(XMLElement* task, const char* taskDistributionXmlElementName, const char* isDistributionEnabledBoolVarName,
@@ -776,11 +883,347 @@ void ECSBuilder::activateFirstReplica(const std::string& category) {
 
     // Remove from inactive list so a second trigger would pick the next replica
     it->second.erase(it->second.begin());
+    categoryActiveNodePath[category] = replicaNodePath;
 
     std::cout << "[ECSBuilder] Activated replica of '" << category
               << "' on " << replicaNodePath
               << " (" << replicaIP << ") at t=" << simTime()
               << " — updated " << supervisors.size() << " supervisor(s)." << endl;
+}
+
+// ---------------------------------------------------------------------------
+// GLOBAL_SNAPSHOT — emitted every SNAPSHOT_INTERVAL_S sim-seconds to stdout.
+// ---------------------------------------------------------------------------
+void ECSBuilder::emitGlobalSnapshot() {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(3);
+
+    oss << "{\"type\":\"GLOBAL_SNAPSHOT\",\"sim_time_s\":" << simTime().dbl() << ",\"devices\":[";
+
+    // Aggregate observed link delays per device across all sinks
+    std::map<std::string, std::pair<double,int>> obsAccum;  // device -> (sum_ms, count)
+    for (StreamingSink* sink : sinkModules) {
+        for (auto& kv : sink->getLatestLinkDelayPerDevice()) {
+            obsAccum[kv.first].first  += kv.second;
+            obsAccum[kv.first].second += 1;
+        }
+    }
+
+    bool firstDevice = true;
+    for (auto& ni : snapshotNodes) {
+        int queueTotal = 0;
+        for (int c = 0; c < ni.coresTotal; c++) {
+            cModule* coreModule = ni.module->getSubmodule("cpuCore", c);
+            if (!coreModule) continue;
+            CPUCore* core = check_and_cast<CPUCore*>(coreModule);
+            queueTotal += core->getTotalQueueDepth();
+        }
+
+        // Observed link delay: average of all sink-window measurements for this device.
+        // Falls back to configured value if no traffic has passed through yet.
+        double obsDelay = ni.linkDelayMs;
+        auto obsIt = obsAccum.find(ni.deviceLabel);
+        if (obsIt != obsAccum.end() && obsIt->second.second > 0)
+            obsDelay = obsIt->second.first / obsIt->second.second;
+
+        if (!firstDevice) oss << ",";
+        firstDevice = false;
+
+        oss << "{";
+        oss << "\"device\":\""              << ni.deviceLabel << "\",";
+        oss << "\"cores_total\":"           << ni.coresTotal    << ",";
+        oss << "\"queue_depth_total\":"     << queueTotal       << ",";
+        oss << "\"link_delay_ms\":"         << ni.linkDelayMs   << ",";
+        oss << "\"observed_link_delay_ms\":" << obsDelay        << ",";
+        oss << "\"link_cost_per_gb\":"      << ni.linkCostPerGB;
+        oss << "}";
+    }
+
+    oss << "]}";
+    emitToClient(oss.str());
+}
+
+// ---------------------------------------------------------------------------
+// Command dispatcher — called on the simulation thread from the pollMsg handler.
+// Parses a space-delimited command line, executes it, and returns the ACK string.
+// ---------------------------------------------------------------------------
+std::string ECSBuilder::dispatchCommand(const std::string& line) {
+    std::vector<std::string> tokens = cStringTokenizer(line.c_str()).asVector();
+    if (tokens.empty())
+        return "ERROR UNKNOWN - empty command";
+
+    const std::string& action = tokens[0];
+
+    if (action == "SPLIT_LOAD") {
+        if (tokens.size() < 3)
+            return "ERROR SPLIT_LOAD - usage: SPLIT_LOAD <operator> <replica> <strategy>";
+        const std::string& opCategory  = tokens[1];
+        const std::string& replicaName = tokens[2];  // logged; category used for lookup
+
+        auto it = inactiveReplicaNodePaths.find(opCategory);
+        if (it == inactiveReplicaNodePaths.end() || it->second.empty()) {
+            return "ERROR SPLIT_LOAD " + opCategory + " no dormant replica found for " + opCategory;
+        }
+
+        activateFirstReplica(opCategory);
+
+        std::ostringstream ack;
+        ack << "OK SPLIT_LOAD " << opCategory << " " << simTime().dbl();
+        std::cout << "[ECSBuilder] SPLIT_LOAD: activated replica '" << replicaName
+                  << "' for category '" << opCategory << "' at t=" << simTime() << endl;
+        return ack.str();
+    }
+
+    if (action == "RE_ROUTE") {
+        // RE_ROUTE <operator> <from_device> <to_device>
+        // e.g. RE_ROUTE inflateOp transitNodes[0] transitNodes[1]
+        if (tokens.size() < 4)
+            return "ERROR RE_ROUTE - usage: RE_ROUTE <operator> <from_device> <to_device>";
+
+        const std::string& opCategory  = tokens[1];
+        const std::string& fromDevice  = tokens[2];  // short name e.g. "transitNodes[0]"
+        const std::string& toDevice    = tokens[3];
+
+        // Check there is a dormant replica to activate on to_device
+        auto replicaIt = inactiveReplicaNodePaths.find(opCategory);
+        if (replicaIt == inactiveReplicaNodePaths.end() || replicaIt->second.empty())
+            return "ERROR RE_ROUTE " + opCategory + " no dormant replica found for " + opCategory;
+
+        // Find replica path matching to_device
+        std::string replicaPath;
+        int replicaIdx = -1;
+        std::string parentPrefix = getParentModule()->getFullPath() + ".";
+        std::string toDeviceFull = parentPrefix + toDevice;
+        for (int i = 0; i < (int)replicaIt->second.size(); i++) {
+            if (replicaIt->second[i] == toDeviceFull) {
+                replicaPath = replicaIt->second[i];
+                replicaIdx  = i;
+                break;
+            }
+        }
+        if (replicaIdx < 0)
+            return "ERROR RE_ROUTE " + opCategory + " no replica pre-deployed on " + toDevice;
+
+        // Resolve IPs
+        std::string fromDeviceFull = parentPrefix + fromDevice;
+        inet::L3Address fromIP = inet::L3AddressResolver().resolve(fromDeviceFull.c_str());
+        inet::L3Address toIP   = inet::L3AddressResolver().resolve(replicaPath.c_str());
+
+        // 1. Activate replica on to_device (adds toIP to upstream round-robin lists)
+        auto& supervisors = categoryUpstreamSupervisors[opCategory];
+        for (auto& [sv, senderCat] : supervisors)
+            sv->activateReplica(senderCat, toIP);
+
+        // 2. Deactivate from_device (remove fromIP from upstream round-robin lists)
+        for (auto& [sv, senderCat] : supervisors)
+            sv->deactivateNode(senderCat, fromIP);
+
+        // 3. Update tracking state
+        replicaIt->second.erase(replicaIt->second.begin() + replicaIdx);
+        categoryActiveNodePath[opCategory] = replicaPath;
+
+        std::ostringstream ack;
+        ack << "OK RE_ROUTE " << opCategory << " " << simTime().dbl();
+        std::cout << "[ECSBuilder] RE_ROUTE: moved '" << opCategory
+                  << "' from " << fromDevice << " to " << toDevice
+                  << " at t=" << simTime() << endl;
+        return ack.str();
+    }
+
+    if (action == "HOLD") {
+        std::string reason = (tokens.size() > 1) ? tokens[1] : "UNSPECIFIED";
+        std::cout << "[ECSBuilder] HOLD received: " << reason
+                  << " at t=" << simTime() << endl;
+        std::ostringstream ack;
+        ack << "OK HOLD - " << simTime().dbl();
+        return ack.str();
+    }
+
+    return "ERROR UNKNOWN - unrecognised action: " + action;
+}
+
+// ---------------------------------------------------------------------------
+// Report stream helpers — push JSON reports to any connected Optimizer client.
+// ---------------------------------------------------------------------------
+
+// Writes json to stdout and, if a client is connected on the report port, also
+// pushes it over that TCP connection. Callable from the simulation thread only.
+void ECSBuilder::emitToClient(const std::string& json) {
+    std::string line = json + "\n";
+
+    // Always write to stdout so terminal/log captures still work.
+    std::cout << line;
+    std::cout.flush();
+
+    // Push to TCP client if one is connected.
+    int fd;
+    {
+        std::lock_guard<std::mutex> lock(reportClientMutex);
+        fd = reportClientFd;
+    }
+    if (fd < 0) return;
+
+    ssize_t sent = ::send(fd, line.c_str(), line.size(), MSG_NOSIGNAL);
+    if (sent < 0) {
+        // Client disconnected; clear the fd so we stop trying.
+        std::lock_guard<std::mutex> lock(reportClientMutex);
+        if (reportClientFd == fd) {
+            close(reportClientFd);
+            reportClientFd = -1;
+        }
+        std::cout << "[ECSBuilder] Report stream: optimizer disconnected\n";
+    }
+}
+
+// Listens for incoming Optimizer connections on the report port.
+// Accepts one client at a time; replaces any existing client on reconnect.
+// Runs on a background thread; never reads from clients (push-only channel).
+void ECSBuilder::reportServerLoop(int port) {
+    reportServerFd = socket(AF_INET, SOCK_STREAM, 0);
+    if (reportServerFd < 0) {
+        std::cerr << "[ECSBuilder] Report server: socket() failed\n";
+        return;
+    }
+
+    int opt = 1;
+    setsockopt(reportServerFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    sockaddr_in addr{};
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port        = htons((uint16_t)port);
+
+    if (bind(reportServerFd, (sockaddr*)&addr, sizeof(addr)) < 0 ||
+        listen(reportServerFd, 1) < 0) {
+        std::cerr << "[ECSBuilder] Report server: bind/listen failed on port " << port << "\n";
+        close(reportServerFd);
+        reportServerFd = -1;
+        return;
+    }
+
+    std::cout << "[ECSBuilder] TCP report stream server listening on port " << port << "\n";
+
+    while (reportRunning) {
+        int clientFd = accept(reportServerFd, nullptr, nullptr);
+        if (clientFd < 0) break;  // server socket closed by finish()
+
+        std::cout << "[ECSBuilder] Report stream: optimizer connected\n";
+
+        std::lock_guard<std::mutex> lock(reportClientMutex);
+        if (reportClientFd >= 0) close(reportClientFd);  // close previous client on reconnect
+        reportClientFd = clientFd;
+    }
+
+    close(reportServerFd);
+    reportServerFd = -1;
+}
+
+// ---------------------------------------------------------------------------
+// TCP server — runs on a background thread; reads one command line per
+// connection, hands it to the simulation thread via cmdMutex/cmdCv, and waits
+// for the simulation thread to send the ACK before looping back to accept().
+// ---------------------------------------------------------------------------
+void ECSBuilder::tcpServerLoop(int port) {
+    tcpServerFd = socket(AF_INET, SOCK_STREAM, 0);
+    if (tcpServerFd < 0) {
+        std::cerr << "[ECSBuilder] TCP server: socket() failed" << std::endl;
+        return;
+    }
+
+    int opt = 1;
+    setsockopt(tcpServerFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    sockaddr_in addr{};
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port        = htons((uint16_t)port);
+
+    if (bind(tcpServerFd, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        std::cerr << "[ECSBuilder] TCP server: bind() failed on port " << port << std::endl;
+        close(tcpServerFd);
+        tcpServerFd = -1;
+        return;
+    }
+    if (listen(tcpServerFd, 1) < 0) {
+        std::cerr << "[ECSBuilder] TCP server: listen() failed" << std::endl;
+        close(tcpServerFd);
+        tcpServerFd = -1;
+        return;
+    }
+
+    std::cout << "[ECSBuilder] TCP optimizer server listening on port " << port << std::endl;
+
+    while (tcpRunning) {
+        int clientFd = accept(tcpServerFd, nullptr, nullptr);
+        if (clientFd < 0) break;  // server socket closed by finish()
+
+        std::cout << "[ECSBuilder] TCP optimizer connected" << std::endl;
+
+        // Read one newline-terminated command line.
+        std::string line;
+        char c;
+        while (recv(clientFd, &c, 1, 0) == 1) {
+            if (c == '\n' || c == '\r') break;
+            line += c;
+        }
+
+        if (!line.empty()) {
+            // Hand off to simulation thread: store line + fd, signal, then wait.
+            {
+                std::unique_lock<std::mutex> lock(cmdMutex);
+                cmdLine     = line;
+                cmdClientFd = clientFd;
+                cmdPending  = true;
+            }
+            cmdCv.notify_one();
+
+            // Block until simulation thread sends ACK and clears cmdPending.
+            {
+                std::unique_lock<std::mutex> lock(cmdMutex);
+                cmdCv.wait(lock, [this]{ return !cmdPending || !tcpRunning; });
+            }
+            // clientFd was closed by the simulation thread.
+        } else {
+            close(clientFd);
+        }
+
+        std::cout << "[ECSBuilder] TCP optimizer command processed" << std::endl;
+    }
+
+    close(tcpServerFd);
+    tcpServerFd = -1;
+}
+
+void ECSBuilder::finish() {
+    // --- Shut down report stream server ---
+    reportRunning = false;
+    {
+        std::lock_guard<std::mutex> lock(reportClientMutex);
+        if (reportClientFd >= 0) { close(reportClientFd); reportClientFd = -1; }
+    }
+    if (reportServerFd >= 0) {
+        shutdown(reportServerFd, SHUT_RDWR);
+        close(reportServerFd);
+        reportServerFd = -1;
+    }
+    if (reportThread.joinable()) reportThread.detach();
+
+    // --- Shut down command server ---
+    tcpRunning = false;
+    // Wake the TCP thread if it is blocked in cmdCv.wait() after handing off a command.
+    cmdCv.notify_all();
+    if (tcpServerFd >= 0) {
+        shutdown(tcpServerFd, SHUT_RDWR);
+        close(tcpServerFd);
+        tcpServerFd = -1;
+    }
+    // Detach rather than join — accept() may not unblock reliably on WSL2.
+    if (tcpThread.joinable()) tcpThread.detach();
+
+    cancelAndDelete(pollMsg);
+    pollMsg = nullptr;
+    cancelAndDelete(snapshotMsg);
+    snapshotMsg = nullptr;
 }
 
 } /* namespace ecsnetpp */

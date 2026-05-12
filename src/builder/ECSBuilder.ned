@@ -27,5 +27,12 @@ simple ECSBuilder
         // Total operator instances per category (1 active + N-1 dormant replicas).
         // Set to 1 to disable replica generation entirely.
         int replicasPerOperator = default(2);
+        // TCP port the simulator listens on for optimizer commands.
+        // Set to 0 to disable the TCP server (offline/batch mode).
+        int tcpOptimizerPort = default(9999);
+        // TCP port on which the simulator pushes JSON report stream to the optimizer.
+        // Optimizer connects once and reads newline-delimited JSON (TRIGGER_REPORT / GLOBAL_SNAPSHOT).
+        // Set to 0 to disable (reports go to stdout only).
+        int tcpReportPort = default(9998);
 }
 

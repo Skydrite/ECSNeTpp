@@ -37,6 +37,7 @@ module CloudNodeA extends StandardHost
         string ackerAddress = default("");
         bool isEdgeDevice = false;
         double linkDelay @unit(s) = default(0s); // per-node WAN link delay, overridable via ini
+        double slaLatency @unit(s) = default(0.1s); // P99 end-to-end latency SLA for sinks on this node
         string cpuCoreSchedulerType = default("RoundRobinCpuCoreScheduler");
         @display("bgb=728.91003,656.82");
         @statistic[processingLatency](title="processingLatency"; source=processingTime; record=vector);

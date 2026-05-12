@@ -35,6 +35,14 @@ protected:
     double delay;
     bool ackersEnabled;
     bool isOnEdgeDevice;
+public:
+    // Returns total number of messages queued across all processing queues.
+    int getTotalQueueDepth() const {
+        int total = 0;
+        for (const auto& kv : processingQueueMap)
+            total += kv.second.getLength();
+        return total;
+    }
 protected:
     virtual void initialize() override;
     virtual void handleMessage(cMessage *msg) override;

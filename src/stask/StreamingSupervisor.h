@@ -70,6 +70,8 @@ public:
     // i.e. the category of the task hosted on this node that sends to the replica).
     // Resets the round-robin counter so load spreads evenly from this point.
     void activateReplica(const std::string& senderCategory, inet::L3Address nodeIP);
+    // Removes nodeIP from the destination list for senderCategory (RE_ROUTE: stop sending to old node).
+    void deactivateNode(const std::string& senderCategory, inet::L3Address nodeIP);
     virtual void socketDataArrived(int connId, void *yourPtr, cPacket *msg, bool urgent) override;
     virtual void socketFailure(int connId, void *yourPtr, int code) override;
 };

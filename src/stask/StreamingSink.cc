@@ -61,27 +61,48 @@ void StreamingSink::handleMessage(cMessage *msg) {
         simtime_t windowStart = simTime() - WINDOW_INTERVAL_S;
 
         // --- per-hop bottleneck thresholds ---
-        static constexpr double NETWORK_THRESHOLD_FACTOR      = 0.5;
-        static constexpr int    COMPUTE_QUEUE_THRESHOLD       = 5;
-        static constexpr double COMPUTE_PROC_THRESHOLD_FACTOR = 0.3;
-
-        auto fmtHop = [](const std::string& s) -> std::string {
-            auto p = s.find('@');
-            return (p != std::string::npos) ? s.substr(0, p) + " @ " + s.substr(p + 1) : s;
-        };
+        static constexpr double NETWORK_THRESHOLD_FACTOR  = 0.5;
+        static constexpr int    COMPUTE_QUEUE_THRESHOLD   = 5;
 
         int totalEvents = 0;
         for (auto& kv : pathStats) totalEvents += (int)kv.second.e2eLatencies.size();
 
         if (totalEvents > 0) {
+            // Helper: split "taskName@deviceName" into {"taskName", "deviceName"}
+            auto splitLabel = [](const std::string& label, std::string& op, std::string& dev) {
+                auto p = label.find('@');
+                if (p != std::string::npos) {
+                    op  = label.substr(0, p);
+                    dev = label.substr(p + 1);
+                } else {
+                    op  = label;
+                    dev = "?";
+                }
+            };
+
+            // Helper: JSON-escape a string (handle quotes and backslashes)
+            auto jsonStr = [](const std::string& s) -> std::string {
+                std::string out = "\"";
+                for (char c : s) {
+                    if      (c == '"')  out += "\\\"";
+                    else if (c == '\\') out += "\\\\";
+                    else                out += c;
+                }
+                out += "\"";
+                return out;
+            };
+
             std::ostringstream oss;
             oss << std::fixed << std::setprecision(3);
-            oss << "\n[WINDOW t=" << windowStart << "-" << simTime() << "]\n"
-                << "  sink:   " << mySTaskCategory << "\n"
-                << "  node:   " << getParentModule()->getFullPath() << "\n"
-                << "  l_target_s: " << slaLatency << "\n"
-                << "  paths:  " << pathStats.size() << "\n";
 
+            // Accumulator for observed link delay per device this window.
+            // key = device short name (e.g. "transitNodes[0]"), value = (sum_ms, count)
+            std::map<std::string, std::pair<double,int>> devLinkAccum;
+
+            // Build paths array
+            std::ostringstream pathsArr;
+            pathsArr << std::fixed << std::setprecision(3);
+            bool firstPath = true;
             for (auto& kv : pathStats) {
                 const std::string& pathKey = kv.first;
                 PathWindowStats& ps = kv.second;
@@ -103,48 +124,67 @@ void StreamingSink::handleMessage(cMessage *msg) {
 
                 double budgetPct = (slaLatency > 0) ? (e2eP99 / slaLatency * 100.0) : 0.0;
                 const char* trigger;
-                if      (e2eP99 > slaLatency)  trigger = "BREACH";
-                else if (budgetPct >= 90.0)     trigger = "WARN";
-                else                            trigger = "OK";
+                if      (e2eP99 > slaLatency) trigger = "BREACH";
+                else if (budgetPct >= 90.0)   trigger = "WARN";
+                else                          trigger = "OK";
 
-                oss << "  ---\n"
-                    << "  path_key:        " << pathKey << "\n"
-                    << "  events:          " << n << "\n"
-                    << "  p99_current_s:   " << e2eP99 << "\n"
-                    << "  e2e_mean_s:      " << (e2eSum / n) << "\n"
-                    << "  p99_trend:       " << trend << "\n"
-                    << std::setprecision(1)
-                    << "  budget_used_pct: " << budgetPct << "\n"
-                    << "  trigger_reason:  " << trigger << "\n";
+                if (!firstPath) pathsArr << ",";
+                firstPath = false;
 
-                if (ps.maxHops > 0) {
-                    oss << std::fixed << std::setprecision(3);
-                    oss << "  hops:\n";
-                    for (int h = 0; h < ps.maxHops && h < MAX_HOPS; h++) {
-                        int cnt = ps.hopCount[h];
-                        if (cnt == 0) continue;
-                        double linkMean  = ps.hopLinkSum[h]  / cnt;
-                        double procMean  = ps.hopProcSum[h]  / cnt;
-                        int    queueMean = (int)(ps.hopQueueSum[h] / cnt);
-                        std::string hopLabel = ps.hopLabels[h].empty() ? "?" : fmtHop(ps.hopLabels[h]);
+                pathsArr << "{";
+                pathsArr << "\"path_key\":" << jsonStr(pathKey) << ",";
+                pathsArr << "\"events\":"          << n                    << ",";
+                pathsArr << "\"p99_current_s\":"   << e2eP99               << ",";
+                pathsArr << "\"e2e_mean_s\":"       << (e2eSum / n)         << ",";
+                pathsArr << "\"p99_trend\":"        << jsonStr(trend)       << ",";
+                pathsArr << std::setprecision(1);
+                pathsArr << "\"budget_used_pct\":"  << budgetPct            << ",";
+                pathsArr << "\"trigger_reason\":"   << jsonStr(trigger)     << ",";
+                pathsArr << std::setprecision(3);
 
-                        double fairShareMs = (slaLatency * 1000.0) / ps.maxHops;
-                        bool networkBad = linkMean  > fairShareMs * NETWORK_THRESHOLD_FACTOR;
-                        bool computeBad = queueMean >= COMPUTE_QUEUE_THRESHOLD
-                                       || procMean  > fairShareMs * COMPUTE_PROC_THRESHOLD_FACTOR;
-                        const char* bottleneck;
-                        if      ( networkBad &&  computeBad) bottleneck = "BOTH";
-                        else if ( networkBad && !computeBad) bottleneck = "NETWORK";
-                        else if (!networkBad &&  computeBad) bottleneck = "COMPUTE";
-                        else                                  bottleneck = "OK";
+                // Build hops array
+                pathsArr << "\"hops\":[";
+                bool firstHop = true;
+                double cumulativeMs = 0.0;
+                for (int h = 0; h < ps.maxHops && h < MAX_HOPS; h++) {
+                    int cnt = ps.hopCount[h];
+                    if (cnt == 0) continue;
+                    double linkMean  = ps.hopLinkSum[h]  / cnt;
+                    double procMean  = ps.hopProcSum[h]  / cnt;
+                    int    queueMean = (int)(ps.hopQueueSum[h] / cnt);
+                    cumulativeMs    += linkMean + procMean;
 
-                        oss << "    - hop: " << h << "  (" << hopLabel << ")\n"
-                            << "      link_ms:       " << linkMean  << "\n"
-                            << "      processing_ms: " << procMean  << "\n"
-                            << "      queue_depth:   " << queueMean << "\n"
-                            << "      bottleneck:    " << bottleneck << "\n";
-                    }
+                    std::string toOp, toDev;
+                    splitLabel(ps.hopLabels[h].empty() ? "?" : ps.hopLabels[h], toOp, toDev);
+
+                    // Accumulate observed link delay for this device
+                    devLinkAccum[toDev].first  += linkMean;
+                    devLinkAccum[toDev].second += 1;
+
+                    double fairShareMs = (slaLatency * 1000.0) / ps.maxHops;
+                    bool networkBad = linkMean  > fairShareMs * NETWORK_THRESHOLD_FACTOR;
+                    bool computeBad = queueMean >= COMPUTE_QUEUE_THRESHOLD;
+                    const char* bottleneck;
+                    if      ( networkBad &&  computeBad) bottleneck = "BOTH";
+                    else if ( networkBad && !computeBad) bottleneck = "NETWORK";
+                    else if (!networkBad &&  computeBad) bottleneck = "COMPUTE";
+                    else                                  bottleneck = "OK";
+
+                    if (!firstHop) pathsArr << ",";
+                    firstHop = false;
+
+                    pathsArr << "{";
+                    pathsArr << "\"hop\":"           << h                      << ",";
+                    pathsArr << "\"to_op\":"         << jsonStr(toOp)          << ",";
+                    pathsArr << "\"to_device\":"     << jsonStr(toDev)         << ",";
+                    pathsArr << "\"link_ms\":"       << linkMean               << ",";
+                    pathsArr << "\"processing_ms\":" << procMean               << ",";
+                    pathsArr << "\"cumulative_ms\":" << cumulativeMs           << ",";
+                    pathsArr << "\"queue_depth\":"   << queueMean              << ",";
+                    pathsArr << "\"bottleneck\":"    << jsonStr(bottleneck);
+                    pathsArr << "}";
                 }
+                pathsArr << "]}";  // close hops array and path object
 
                 // reset per-path window data (preserve prevP99)
                 ps.e2eLatencies.clear();
@@ -155,11 +195,36 @@ void StreamingSink::handleMessage(cMessage *msg) {
                 std::fill(ps.hopCount,    ps.hopCount    + MAX_HOPS, 0);
                 ps.maxHops = 0;
             }
-            std::cout << oss.str() << endl;
+
+            // Update persistent observed link delay map from this window's data
+            for (auto& kv : devLinkAccum)
+                latestLinkDelayPerDevice[kv.first] = kv.second.first / kv.second.second;
+
+            // Assemble top-level TRIGGER_REPORT object — one line of JSON
+            oss << "{";
+            oss << "\"type\":\"TRIGGER_REPORT\",";
+            oss << "\"window_start_s\":" << windowStart.dbl() << ",";
+            oss << "\"window_end_s\":"   << simTime().dbl()   << ",";
+            oss << "\"sink\":"           << jsonStr(mySTaskCategory)                    << ",";
+            oss << "\"node\":"           << jsonStr(getParentModule()->getFullPath())   << ",";
+            oss << "\"l_target_s\":"     << slaLatency                                 << ",";
+            oss << "\"paths\":["         << pathsArr.str() << "]";
+            oss << "}";
+
+            if (reportEmitter) reportEmitter(oss.str());
+            else std::cout << oss.str() << "\n";
         } else {
-            std::cout << "[WINDOW t=" << windowStart << "-" << simTime() << "]"
-                      << "  events=0  sink=" << mySTaskCategory
-                      << "  node=" << getParentModule()->getFullPath() << endl;
+            // Emit a minimal JSON heartbeat for zero-event windows
+            std::ostringstream hb;
+            hb << "{\"type\":\"TRIGGER_REPORT\""
+               << ",\"window_start_s\":" << windowStart.dbl()
+               << ",\"window_end_s\":"   << simTime().dbl()
+               << ",\"sink\":\""         << mySTaskCategory << "\""
+               << ",\"node\":\""         << getParentModule()->getFullPath() << "\""
+               << ",\"l_target_s\":"     << slaLatency
+               << ",\"paths\":[]}";
+            if (reportEmitter) reportEmitter(hb.str());
+            else std::cout << hb.str() << "\n";
         }
 
         scheduleAt(simTime() + WINDOW_INTERVAL_S, windowTimerMsg);
