@@ -1,5 +1,17 @@
 #!/bin/sh
 cd `dirname $0`
-../ECSNeTpp -u Cmdenv -n .:../../ecsnetpp:../../inet-3.6.5/src:../src -f omnetpp.ini -c SAFA-DCM
 
-python3 parse_results.py
+#SIM=../ECSNeTpp
+#ARGS="-u Cmdenv -n .:../../ecsnetpp:../../inet-3.6.5/src:../src"
+#INI=../src/configs/experiments/geographic/omnetpp.ini
+
+# ── T-GEO1: European cluster (London/Amsterdam/Paris → Frankfurt) ─────────────
+#$SIM $ARGS -f $INI -c Exp-GEO1-AGG-Med
+#python3 parse_results.py --ini $INI
+
+SIM=../ECSNeTpp
+ARGS="-u Cmdenv -n .:../../ecsnetpp:../../inet-3.6.5/src:../src"
+INI=../src/configs/online_analysis/omnetpp.ini
+
+$SIM $ARGS -f $INI -c MinimalNetTest
+python3 parse_results.py --ini $INI

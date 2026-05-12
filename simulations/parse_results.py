@@ -15,14 +15,22 @@ Place in: ECSNeTpp/simulations/
 import os
 import re
 import csv
+import sys
+import argparse
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
-# ── Paths (relative to simulations/) ─────────────────────────────────────────
-INI_FILE    = "omnetpp.ini"
-RESULTS_DIR = "results"
-REPORTS_DIR = os.path.join(RESULTS_DIR, "reports")
-CSV_FILE    = os.path.join(RESULTS_DIR, "results_log.csv")
+# ── Paths — overridable via --ini ─────────────────────────────────────────────
+def _resolve_paths(ini_file):
+    ini_dir     = os.path.dirname(os.path.abspath(ini_file))
+    results_dir = os.path.join(ini_dir, "results")
+    return ini_file, results_dir, os.path.join(results_dir, "reports"), os.path.join(results_dir, "results_log.csv")
+
+_args = argparse.ArgumentParser(add_help=False)
+_args.add_argument("--ini", default="omnetpp.ini")
+_parsed, _ = _args.parse_known_args()
+
+INI_FILE, RESULTS_DIR, REPORTS_DIR, CSV_FILE = _resolve_paths(_parsed.ini)
 
 # ── CSV columns ───────────────────────────────────────────────────────────────
 CSV_COLUMNS = [
@@ -73,7 +81,7 @@ def parse_ini(ini_path, target_config=None):
 
     Reads:
       - description, allocationPlanFile, dspTopologyFile, fixedSourceEventRate
-        only from the target config section.
+        from the target config section AND any configs it extends (inheritance chain).
       - freq from ${freq=...} anywhere in the file (defined globally in defaultplan).
     """
     result = {
@@ -87,6 +95,7 @@ def parse_ini(ini_path, target_config=None):
 
     current_config = None
     in_target = False  # True when we're inside the target config section
+    parent_config = None  # set if we see "extends = X" in the target block
 
     with open(ini_path, "r") as f:
         for line in f:
@@ -127,6 +136,12 @@ def parse_ini(ini_path, target_config=None):
                         continue
                 continue
 
+            # extends — record parent config to fall back to for missing values
+            m = re.match(r'^extends\s*=\s*(.+)', line)
+            if m:
+                parent_config = m.group(1).strip()
+                continue
+
             # description
             m = re.match(r'^description\s*=\s*(.+)', line)
             if m:
@@ -137,18 +152,14 @@ def parse_ini(ini_path, target_config=None):
             m = re.match(r'^\*\.taskbuilder\.allocationPlanFile\s*=\s*"?(.+?)"?\s*$', line)
             if m:
                 path = m.group(1).strip().strip('"')
-                result["allocation_file"] = os.path.normpath(
-                    os.path.join(os.path.dirname(ini_path), path)
-                )
+                result["allocation_file"] = os.path.normpath(path)
                 continue
 
             # dspTopologyFile
             m = re.match(r'^\*\.taskbuilder\.dspTopologyFile\s*=\s*"?(.+?)"?\s*$', line)
             if m:
                 path = m.group(1).strip().strip('"')
-                result["topology_file"] = os.path.normpath(
-                    os.path.join(os.path.dirname(ini_path), path)
-                )
+                result["topology_file"] = os.path.normpath(path)
                 continue
 
             # per-device fixedSourceEventRate  e.g. *.pi3Bs[0].fixedSourceEventRate = 5
@@ -163,6 +174,18 @@ def parse_ini(ini_path, target_config=None):
             if m:
                 result["event_rates"][f"{m.group(1)}[*]"] = int(m.group(2))
                 continue
+
+    # Follow the extends chain for any values still missing (e.g. dspTopologyFile
+    # defined in a base config like Exp-T1-Base that the target config extends).
+    if parent_config and (result["topology_file"] is None or result["allocation_file"] is None):
+        parent_data = parse_ini(ini_path, target_config=parent_config)
+        if result["topology_file"] is None:
+            result["topology_file"] = parent_data["topology_file"]
+        if result["allocation_file"] is None:
+            result["allocation_file"] = parent_data["allocation_file"]
+        # Merge event rates: child values take priority (already set), fill missing from parent
+        for device, rate in parent_data["event_rates"].items():
+            result["event_rates"].setdefault(device, rate)
 
     return result
 
@@ -209,10 +232,13 @@ def parse_sca(sca_path):
 
             # fields inside a statistic block
             if current_statistic and current_module:
-                m = re.match(r'^field\s+(\w+)\s+([\d.eE+\-]+)', line)
+                m = re.match(r'^field\s+(\w+)\s+(\S+)', line)
                 if m:
                     fname = m.group(1)
-                    fval  = float(m.group(2))
+                    try:
+                        fval = float(m.group(2))
+                    except ValueError:
+                        continue  # skip '-' or other non-numeric placeholders
                     if current_statistic == "endToEndDelay:stats":
                         if fname == "count":  per_module[current_module]["count"]      = int(fval)
                         if fname == "mean":   per_module[current_module]["e2e_mean"]   = fval
@@ -237,12 +263,15 @@ def parse_sca(sca_path):
                 per_module.setdefault(m.group(1), {})["total_latency_mean"] = float(m.group(2))
                 continue
 
-    # Normalize full module path to just the device[index] label.
-    # e.g. "SimpleEdgeCloudEnvironment.cloudNodes[0].supervisor" -> "cloudNodes[0]"
-    # e.g. "SimpleEdgeCloudEnvironment.cloudNodes[0].si10"       -> "cloudNodes[0]"
+    # Normalize full module path to "device[index].taskName" so that multiple
+    # sinks on the same node remain distinct.
+    # e.g. "SimpleEdgeCloudEnvironment.cloudNodes[0].supervisor.si1" -> "cloudNodes[0].si1"
+    # e.g. "SimpleEdgeCloudEnvironment.cloudNodes[0].supervisor"     -> "cloudNodes[0]"
     def short_label(full_path):
         parts = full_path.split(".")
-        return parts[1] if len(parts) >= 2 else full_path
+        device = parts[1] if len(parts) >= 2 else full_path
+        task   = parts[-1] if len(parts) >= 3 else ""
+        return f"{device}.{task}" if task and task != device else device
 
     # Merge all sub-module data into one dict per device label
     per_device = {}
@@ -372,7 +401,9 @@ def parse_vci(vci_path):
 
     def short_label(full_path):
         parts = full_path.split(".")
-        return parts[1] if len(parts) >= 2 else full_path
+        device = parts[1] if len(parts) >= 2 else full_path
+        task   = parts[-1] if len(parts) >= 3 else ""
+        return f"{device}.{task}" if task and task != device else device
 
     per_sink = {}
     for mod, data in per_module.items():
@@ -720,10 +751,17 @@ def main():
         metrics["total_latency_mean"] = metrics["total_latency_mean"] or vci_agg["total_latency_mean"]
         # merge per_sink latency means if sca didn't have them
         for label, sm in vci_per_sink.items():
-            per_sink.setdefault(label, {})
+            # VCI paths are shorter (no task suffix), e.g. "cloudNodes[0]" vs
+            # SCA's "cloudNodes[0].si0" — find the matching SCA key by prefix
+            match_key = label if label in per_sink else next(
+                (k for k in per_sink if k.startswith(label + ".")), None
+            )
+            if match_key is None:
+                match_key = label
+                per_sink.setdefault(match_key, {})
             for key in ("processing_mean", "network_mean", "total_latency_mean"):
-                if per_sink[label].get(key) is None:
-                    per_sink[label][key] = sm.get(key)
+                if per_sink[match_key].get(key) is None:
+                    per_sink[match_key][key] = sm.get(key)
 
     print(f"      Events: {metrics['count']}  |  E2E mean: {metrics['e2e_mean']}s  |  P99: {metrics['e2e_p99']}s")
     if len(per_sink) > 1:
